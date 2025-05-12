@@ -4,7 +4,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use ash::{ext::debug_utils, vk};
+use ash::{
+    ext::debug_utils,
+    vk::{self, PhysicalDevice},
+};
 use glfw::{Glfw, GlfwReceiver};
 
 fn main() {
@@ -18,6 +21,17 @@ fn main() {
     };
 }
 
+#[derive(Debug, Default)]
+struct QueueFamilyIndices {
+    graphics_family: Option<u32>,
+}
+
+impl QueueFamilyIndices {
+    pub fn is_complete(&self) -> bool {
+        self.graphics_family.is_some()
+    }
+}
+
 struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
@@ -26,6 +40,7 @@ struct HelloTriangleApplication {
     instance: ash::Instance,
     debug_utils_instance: Option<debug_utils::Instance>,
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
+    _physical_device: vk::PhysicalDevice,
 }
 
 /// Public functions
@@ -49,6 +64,7 @@ impl HelloTriangleApplication {
         let maybe_debug_messanger = Self::setup_debug_messenger(&entry, &instance)?;
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
+        let physical_device = Self::pick_physical_device(&instance)?;
 
         Ok(Self {
             glfw,
@@ -58,6 +74,7 @@ impl HelloTriangleApplication {
             instance,
             debug_utils_instance,
             debug_utils_messanger,
+            _physical_device: physical_device,
         })
     }
 
@@ -185,8 +202,7 @@ impl HelloTriangleApplication {
             let create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
                     vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
                 )
                 .message_type(
                     vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
@@ -233,6 +249,43 @@ impl HelloTriangleApplication {
 
             vk::FALSE
         }
+    }
+
+    fn pick_physical_device(instance: &ash::Instance) -> Result<PhysicalDevice> {
+        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+
+        if physical_devices.is_empty() {
+            anyhow::bail!("Failed to find devices with Vulkan support");
+        }
+
+        let device = physical_devices
+            .into_iter()
+            .find(|dev| Self::is_device_suitable(instance, dev));
+
+        if let Some(device) = device {
+            Ok(device)
+        } else {
+            anyhow::bail!("Unable to find a suitable device");
+        }
+    }
+
+    fn is_device_suitable(instance: &ash::Instance, device: &PhysicalDevice) -> bool {
+        let mut queue_family_indices = QueueFamilyIndices::default();
+
+        let queue_family_properties =
+            unsafe { instance.get_physical_device_queue_family_properties(*device) };
+
+        for (index, properties) in queue_family_properties.iter().enumerate() {
+            if properties.queue_flags.intersects(vk::QueueFlags::GRAPHICS) {
+                queue_family_indices.graphics_family = Some(index as u32);
+            }
+
+            if queue_family_indices.is_complete() {
+                break;
+            }
+        }
+
+        queue_family_indices.is_complete()
     }
 }
 
