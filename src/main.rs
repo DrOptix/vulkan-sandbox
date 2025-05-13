@@ -48,6 +48,7 @@ struct HelloTriangleApplication {
     _physical_device: vk::PhysicalDevice,
     device: ash::Device,
     _graphics_queue: vk::Queue,
+    _present_queue: vk::Queue,
 }
 
 /// Public functions
@@ -75,7 +76,7 @@ impl HelloTriangleApplication {
         let window_surface = Self::create_window_surface(&instance, &window)?;
         let physical_device =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
-        let (device, graphics_queue) = Self::create_logical_device(
+        let (device, graphics_queue, present_queue) = Self::create_logical_device(
             &instance,
             &khr_surface_instance,
             physical_device,
@@ -95,6 +96,7 @@ impl HelloTriangleApplication {
             _physical_device: physical_device,
             device,
             _graphics_queue: graphics_queue,
+            _present_queue: present_queue,
         })
     }
 
@@ -358,19 +360,32 @@ impl HelloTriangleApplication {
         khr_surface_instance: &khr::surface::Instance,
         physical_device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-    ) -> Result<(ash::Device, vk::Queue)> {
+    ) -> Result<(ash::Device, vk::Queue, vk::Queue)> {
         let queue_family_indices =
             Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
 
-        let queue_create_info = vk::DeviceQueueCreateInfo::default()
-            .queue_priorities(std::slice::from_ref(&1.0))
-            .queue_family_index(queue_family_indices.graphics_family.unwrap());
-
+        let queue_create_infos =
+            if queue_family_indices.graphics_family == queue_family_indices.present_family {
+                vec![
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_priorities(std::slice::from_ref(&1.0))
+                        .queue_family_index(queue_family_indices.graphics_family.unwrap()),
+                ]
+            } else {
+                vec![
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_priorities(std::slice::from_ref(&1.0))
+                        .queue_family_index(queue_family_indices.graphics_family.unwrap()),
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_priorities(std::slice::from_ref(&1.0))
+                        .queue_family_index(queue_family_indices.present_family.unwrap()),
+                ]
+            };
         let device_features = vk::PhysicalDeviceFeatures::default();
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .enabled_features(&device_features)
-            .queue_create_infos(std::slice::from_ref(&queue_create_info));
+            .queue_create_infos(&queue_create_infos);
 
         let device = unsafe {
             instance
@@ -380,8 +395,10 @@ impl HelloTriangleApplication {
 
         let graphics_queue =
             unsafe { device.get_device_queue(queue_family_indices.graphics_family.unwrap(), 0) };
+        let present_queue =
+            unsafe { device.get_device_queue(queue_family_indices.present_family.unwrap(), 0) };
 
-        Ok((device, graphics_queue))
+        Ok((device, graphics_queue, present_queue))
     }
 }
 
