@@ -41,6 +41,8 @@ struct HelloTriangleApplication {
     debug_utils_instance: Option<debug_utils::Instance>,
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
     _physical_device: vk::PhysicalDevice,
+    device: ash::Device,
+    _graphics_queue: vk::Queue,
 }
 
 /// Public functions
@@ -65,6 +67,8 @@ impl HelloTriangleApplication {
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
         let physical_device = Self::pick_physical_device(&instance)?;
+        let (device, graphics_queue) = Self::create_logical_device(&instance, &physical_device)?;
+        let window_surface = Self::create_window_surface(&instance, &window)?;
 
         Ok(Self {
             glfw,
@@ -75,6 +79,8 @@ impl HelloTriangleApplication {
             debug_utils_instance,
             debug_utils_messanger,
             _physical_device: physical_device,
+            device,
+            _graphics_queue: graphics_queue,
         })
     }
 
@@ -269,11 +275,19 @@ impl HelloTriangleApplication {
         }
     }
 
-    fn is_device_suitable(instance: &ash::Instance, device: &PhysicalDevice) -> bool {
+    fn is_device_suitable(instance: &ash::Instance, physical_device: &vk::PhysicalDevice) -> bool {
+        let queue_family_indices = Self::find_queue_families(instance, physical_device);
+        queue_family_indices.is_complete()
+    }
+
+    fn find_queue_families(
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+    ) -> QueueFamilyIndices {
         let mut queue_family_indices = QueueFamilyIndices::default();
 
         let queue_family_properties =
-            unsafe { instance.get_physical_device_queue_family_properties(*device) };
+            unsafe { instance.get_physical_device_queue_family_properties(*physical_device) };
 
         for (index, properties) in queue_family_properties.iter().enumerate() {
             if properties.queue_flags.intersects(vk::QueueFlags::GRAPHICS) {
@@ -285,7 +299,35 @@ impl HelloTriangleApplication {
             }
         }
 
-        queue_family_indices.is_complete()
+        queue_family_indices
+    }
+
+    fn create_logical_device(
+        instance: &ash::Instance,
+        physical_device: &vk::PhysicalDevice,
+    ) -> Result<(ash::Device, vk::Queue)> {
+        let queue_family_indices = Self::find_queue_families(instance, physical_device);
+
+        let queue_create_info = vk::DeviceQueueCreateInfo::default()
+            .queue_priorities(std::slice::from_ref(&1.0))
+            .queue_family_index(queue_family_indices.graphics_family.unwrap());
+
+        let device_features = vk::PhysicalDeviceFeatures::default();
+
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .enabled_features(&device_features)
+            .queue_create_infos(std::slice::from_ref(&queue_create_info));
+
+        let device = unsafe {
+            instance
+                .create_device(*physical_device, &device_create_info, None)
+                .context("Failed to create logical device")?
+        };
+
+        let graphics_queue =
+            unsafe { device.get_device_queue(queue_family_indices.graphics_family.unwrap(), 0) };
+
+        Ok((device, graphics_queue))
     }
 }
 
@@ -297,6 +339,7 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         };
     }
