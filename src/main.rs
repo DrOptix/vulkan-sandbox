@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     ffi::{CStr, CString, c_char},
+    ptr,
 };
 
 use anyhow::{Context, Result};
@@ -36,6 +37,7 @@ struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
     window_events: GlfwReceiver<(f64, glfw::WindowEvent)>,
+    _window_surface: vk::SurfaceKHR,
     _entry: ash::Entry,
     instance: ash::Instance,
     debug_utils_instance: Option<debug_utils::Instance>,
@@ -74,6 +76,7 @@ impl HelloTriangleApplication {
             glfw,
             window,
             window_events,
+            _window_surface: window_surface,
             _entry: entry,
             instance,
             debug_utils_instance,
@@ -119,6 +122,21 @@ impl HelloTriangleApplication {
         } else {
             anyhow::bail!("Unable to create GLFW window")
         }
+    }
+
+    fn create_window_surface(
+        instance: &ash::Instance,
+        window: &glfw::PWindow,
+    ) -> Result<vk::SurfaceKHR> {
+        let mut surface: std::mem::MaybeUninit<vk::SurfaceKHR> = std::mem::MaybeUninit::uninit();
+
+        if window.create_window_surface(instance.handle(), ptr::null(), surface.as_mut_ptr())
+            != vk::Result::SUCCESS
+        {
+            anyhow::bail!("Failed to create GLFW Vulkan window surface.");
+        }
+
+        Ok(unsafe { surface.assume_init() })
     }
 
     fn create_instance(
