@@ -211,13 +211,13 @@ impl HelloTriangleApplication {
         for layer in requested_layers {
             let mut found = false;
             for prop in &existing_layer_properties {
-                if unsafe {
+                let layer_name = unsafe {
                     CStr::from_ptr(prop.layer_name.as_ptr())
                         .to_str()
-                        .context("Failed to convert layer name to string")
-                }?
-                .eq(layer.as_str())
-                {
+                        .context("Failed to convert layer name to string")?
+                };
+
+                if layer_name.eq(layer.as_str()) {
                     found = true;
                     break;
                 }
@@ -229,6 +229,28 @@ impl HelloTriangleApplication {
         }
 
         Ok(())
+    }
+
+    fn check_device_extension_support(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<bool> {
+        let available_extensions =
+            unsafe { instance.enumerate_device_extension_properties(physical_device)? };
+
+        for extension in available_extensions.into_iter() {
+            let extension_name = unsafe {
+                CStr::from_ptr(extension.extension_name.as_ptr())
+                    .to_str()
+                    .context("Failed to convert extension name to string")?
+            };
+
+            if extension_name.eq("VK_KHR_swapchain") {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     fn setup_debug_messenger(
@@ -316,8 +338,9 @@ impl HelloTriangleApplication {
     ) -> Result<bool> {
         let queue_family_indices =
             Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
+        let extensions_supported = Self::check_device_extension_support(instance, physical_device)?;
 
-        Ok(queue_family_indices.is_complete())
+        Ok(queue_family_indices.is_complete() && extensions_supported)
     }
 
     fn find_queue_families(
