@@ -405,9 +405,19 @@ impl HelloTriangleApplication {
                 ]
             };
         let device_features = vk::PhysicalDeviceFeatures::default();
+        let extensions = ["VK_KHR_swapchain".to_string()];
+        let extensions: Vec<CString> = extensions
+            .iter()
+            .map(|ext| CString::new(ext.as_str()).unwrap())
+            .collect();
+        let extensions: Vec<*const c_char> = extensions
+            .iter()
+            .map(|ext| ext.as_ptr() as *const c_char)
+            .collect();
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .enabled_features(&device_features)
+            .enabled_extension_names(&extensions)
             .queue_create_infos(&queue_create_infos);
 
         let device = unsafe {
