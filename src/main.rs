@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use ash::{
     ext::debug_utils,
+    khr,
     vk::{self, PhysicalDevice},
 };
 use glfw::{Glfw, GlfwReceiver};
@@ -25,11 +26,12 @@ fn main() {
 #[derive(Debug, Default)]
 struct QueueFamilyIndices {
     graphics_family: Option<u32>,
+    present_family: Option<u32>,
 }
 
 impl QueueFamilyIndices {
     pub fn is_complete(&self) -> bool {
-        self.graphics_family.is_some()
+        self.graphics_family.is_some() && self.present_family.is_some()
     }
 }
 
@@ -37,9 +39,10 @@ struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
     window_events: GlfwReceiver<(f64, glfw::WindowEvent)>,
-    _window_surface: vk::SurfaceKHR,
+    window_surface: vk::SurfaceKHR,
     _entry: ash::Entry,
     instance: ash::Instance,
+    khr_surface_instance: khr::surface::Instance,
     debug_utils_instance: Option<debug_utils::Instance>,
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
     _physical_device: vk::PhysicalDevice,
@@ -65,20 +68,28 @@ impl HelloTriangleApplication {
 
         let entry = unsafe { ash::Entry::load() }?;
         let instance = Self::create_instance(&entry, &extensions, &validation_layers)?;
+        let khr_surface_instance = khr::surface::Instance::new(&entry, &instance);
         let maybe_debug_messanger = Self::setup_debug_messenger(&entry, &instance)?;
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
-        let physical_device = Self::pick_physical_device(&instance)?;
-        let (device, graphics_queue) = Self::create_logical_device(&instance, &physical_device)?;
         let window_surface = Self::create_window_surface(&instance, &window)?;
+        let physical_device =
+            Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
+        let (device, graphics_queue) = Self::create_logical_device(
+            &instance,
+            &khr_surface_instance,
+            physical_device,
+            window_surface,
+        )?;
 
         Ok(Self {
             glfw,
             window,
             window_events,
-            _window_surface: window_surface,
+            window_surface,
             _entry: entry,
             instance,
+            khr_surface_instance,
             debug_utils_instance,
             debug_utils_messanger,
             _physical_device: physical_device,
@@ -275,41 +286,63 @@ impl HelloTriangleApplication {
         }
     }
 
-    fn pick_physical_device(instance: &ash::Instance) -> Result<PhysicalDevice> {
+    fn pick_physical_device(
+        instance: &ash::Instance,
+        khr_surface_instance: &khr::surface::Instance,
+        surface: vk::SurfaceKHR,
+    ) -> Result<PhysicalDevice> {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
         if physical_devices.is_empty() {
             anyhow::bail!("Failed to find devices with Vulkan support");
         }
 
-        let device = physical_devices
-            .into_iter()
-            .find(|dev| Self::is_device_suitable(instance, dev));
-
-        if let Some(device) = device {
-            Ok(device)
-        } else {
-            anyhow::bail!("Unable to find a suitable device");
+        for physical_device in physical_devices.into_iter() {
+            if Self::is_device_suitable(instance, khr_surface_instance, physical_device, surface)? {
+                return Ok(physical_device);
+            }
         }
+
+        anyhow::bail!("Unable to find a suitable device");
     }
 
-    fn is_device_suitable(instance: &ash::Instance, physical_device: &vk::PhysicalDevice) -> bool {
-        let queue_family_indices = Self::find_queue_families(instance, physical_device);
-        queue_family_indices.is_complete()
+    fn is_device_suitable(
+        instance: &ash::Instance,
+        khr_surface_instance: &khr::surface::Instance,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) -> Result<bool> {
+        let queue_family_indices =
+            Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
+
+        Ok(queue_family_indices.is_complete())
     }
 
     fn find_queue_families(
         instance: &ash::Instance,
-        physical_device: &vk::PhysicalDevice,
-    ) -> QueueFamilyIndices {
+        khr_surface_instance: &khr::surface::Instance,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) -> Result<QueueFamilyIndices> {
         let mut queue_family_indices = QueueFamilyIndices::default();
-
         let queue_family_properties =
-            unsafe { instance.get_physical_device_queue_family_properties(*physical_device) };
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
         for (index, properties) in queue_family_properties.iter().enumerate() {
             if properties.queue_flags.intersects(vk::QueueFlags::GRAPHICS) {
                 queue_family_indices.graphics_family = Some(index as u32);
+            }
+
+            let present_support = unsafe {
+                khr_surface_instance.get_physical_device_surface_support(
+                    physical_device,
+                    index as u32,
+                    surface,
+                )?
+            };
+
+            if present_support {
+                queue_family_indices.present_family = Some(index as u32);
             }
 
             if queue_family_indices.is_complete() {
@@ -317,14 +350,17 @@ impl HelloTriangleApplication {
             }
         }
 
-        queue_family_indices
+        Ok(queue_family_indices)
     }
 
     fn create_logical_device(
         instance: &ash::Instance,
-        physical_device: &vk::PhysicalDevice,
+        khr_surface_instance: &khr::surface::Instance,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
     ) -> Result<(ash::Device, vk::Queue)> {
-        let queue_family_indices = Self::find_queue_families(instance, physical_device);
+        let queue_family_indices =
+            Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
 
         let queue_create_info = vk::DeviceQueueCreateInfo::default()
             .queue_priorities(std::slice::from_ref(&1.0))
@@ -338,7 +374,7 @@ impl HelloTriangleApplication {
 
         let device = unsafe {
             instance
-                .create_device(*physical_device, &device_create_info, None)
+                .create_device(physical_device, &device_create_info, None)
                 .context("Failed to create logical device")?
         };
 
@@ -357,6 +393,8 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.khr_surface_instance
+                .destroy_surface(self.window_surface, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         };
