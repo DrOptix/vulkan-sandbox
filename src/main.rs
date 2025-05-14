@@ -50,12 +50,14 @@ struct HelloTriangleApplication {
     _entry: ash::Entry,
     instance: ash::Instance,
     khr_surface_instance: khr::surface::Instance,
+    khr_swapchain_device: khr::swapchain::Device,
     debug_utils_instance: Option<debug_utils::Instance>,
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
     _physical_device: vk::PhysicalDevice,
     device: ash::Device,
     _graphics_queue: vk::Queue,
     _present_queue: vk::Queue,
+    swapchain: vk::SwapchainKHR,
 }
 
 /// Public functions
@@ -89,6 +91,15 @@ impl HelloTriangleApplication {
             physical_device,
             window_surface,
         )?;
+        let khr_swapchain_device = khr::swapchain::Device::new(&instance, &device);
+        let swapchain = Self::create_swap_chain(
+            &window,
+            &instance,
+            &khr_surface_instance,
+            &khr_swapchain_device,
+            physical_device,
+            window_surface,
+        )?;
 
         Ok(Self {
             glfw,
@@ -98,12 +109,14 @@ impl HelloTriangleApplication {
             _entry: entry,
             instance,
             khr_surface_instance,
+            khr_swapchain_device,
             debug_utils_instance,
             debug_utils_messanger,
             _physical_device: physical_device,
             device,
             _graphics_queue: graphics_queue,
             _present_queue: present_queue,
+            swapchain,
         })
     }
 
@@ -467,6 +480,96 @@ impl HelloTriangleApplication {
 
         Ok((device, graphics_queue, present_queue))
     }
+
+    fn create_swap_chain(
+        window: &glfw::PWindow,
+        instance: &ash::Instance,
+        khr_surface_instance: &khr::surface::Instance,
+        khr_swapchain_device: &khr::swapchain::Device,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) -> Result<vk::SwapchainKHR> {
+        let swap_chain_support =
+            Self::query_swap_chain_support(khr_surface_instance, physical_device, surface)?;
+
+        let surface_format = swap_chain_support
+            .formats
+            .iter()
+            .find(|format| {
+                format.format == vk::Format::B8G8R8A8_SRGB
+                    && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            })
+            .unwrap_or(swap_chain_support.formats.first().unwrap());
+
+        let present_mode = swap_chain_support
+            .present_modes
+            .into_iter()
+            .find(|mode| *mode == vk::PresentModeKHR::MAILBOX)
+            .unwrap_or(vk::PresentModeKHR::FIFO);
+
+        let extent = if swap_chain_support.capabilities.current_extent.width != u32::MAX {
+            swap_chain_support.capabilities.current_extent
+        } else {
+            let (width, height) = window.get_framebuffer_size();
+            let width = width as u32;
+            let height = height as u32;
+
+            vk::Extent2D::default()
+                .width(width.clamp(
+                    swap_chain_support.capabilities.min_image_extent.width,
+                    swap_chain_support.capabilities.max_image_extent.width,
+                ))
+                .height(height.clamp(
+                    swap_chain_support.capabilities.min_image_extent.height,
+                    swap_chain_support.capabilities.max_image_extent.height,
+                ))
+        };
+
+        let mut image_count = swap_chain_support.capabilities.min_image_count + 1;
+
+        if swap_chain_support.capabilities.max_image_count > 0
+            && image_count > swap_chain_support.capabilities.max_image_count
+        {
+            image_count = swap_chain_support.capabilities.max_image_count;
+        }
+
+        // NOTE: `image_array_layers` is always `1` unless you develop a stereoscopic 3D
+        // application
+        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+            .surface(surface)
+            .min_image_count(image_count)
+            .image_format(surface_format.format)
+            .image_color_space(surface_format.color_space)
+            .image_extent(extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .pre_transform(swap_chain_support.capabilities.current_transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(present_mode)
+            .clipped(true)
+            .old_swapchain(vk::SwapchainKHR::null());
+
+        let queue_family_indices =
+            Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
+
+        let queue_family_indices_slice = [
+            queue_family_indices.graphics_family.unwrap(),
+            queue_family_indices.present_family.unwrap(),
+        ];
+        swapchain_create_info =
+            if queue_family_indices.graphics_family != queue_family_indices.present_family {
+                swapchain_create_info
+                    .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(&queue_family_indices_slice)
+            } else {
+                swapchain_create_info.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            };
+
+        let swapchain =
+            unsafe { khr_swapchain_device.create_swapchain(&swapchain_create_info, None)? };
+
+        Ok(swapchain)
+    }
 }
 
 impl Drop for HelloTriangleApplication {
@@ -477,6 +580,8 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.khr_swapchain_device
+                .destroy_swapchain(self.swapchain, None);
             self.khr_surface_instance
                 .destroy_surface(self.window_surface, None);
             self.device.destroy_device(None);
