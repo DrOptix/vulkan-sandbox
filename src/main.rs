@@ -59,6 +59,7 @@ struct HelloTriangleApplication {
     _present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
     _swapchain_images: Vec<vk::Image>,
+    swapchain_images_views: Vec<vk::ImageView>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
 }
@@ -95,15 +96,21 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
         let khr_swapchain_device = khr::swapchain::Device::new(&instance, &device);
-        let (swapchain, swapchain_images, swapchain_format, swapchain_extent) =
-            Self::create_swap_chain(
-                &window,
-                &instance,
-                &khr_surface_instance,
-                &khr_swapchain_device,
-                physical_device,
-                window_surface,
-            )?;
+        let (
+            swapchain,
+            swapchain_images,
+            swapchain_image_views,
+            swapchain_format,
+            swapchain_extent,
+        ) = Self::create_swap_chain(
+            &window,
+            &instance,
+            &khr_surface_instance,
+            &khr_swapchain_device,
+            physical_device,
+            &device,
+            window_surface,
+        )?;
 
         Ok(Self {
             glfw,
@@ -122,6 +129,7 @@ impl HelloTriangleApplication {
             _present_queue: present_queue,
             swapchain,
             _swapchain_images: swapchain_images,
+            swapchain_images_views: swapchain_image_views,
             _swapchain_format: swapchain_format,
             _swapchain_extent: swapchain_extent,
         })
@@ -488,14 +496,22 @@ impl HelloTriangleApplication {
         Ok((device, graphics_queue, present_queue))
     }
 
+    #[allow(clippy::type_complexity)]
     fn create_swap_chain(
         window: &glfw::PWindow,
         instance: &ash::Instance,
         khr_surface_instance: &khr::surface::Instance,
         khr_swapchain_device: &khr::swapchain::Device,
         physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
         surface: vk::SurfaceKHR,
-    ) -> Result<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
+    ) -> Result<(
+        vk::SwapchainKHR,
+        Vec<vk::Image>,
+        Vec<vk::ImageView>,
+        vk::Format,
+        vk::Extent2D,
+    )> {
         let swap_chain_support =
             Self::query_swap_chain_support(khr_surface_instance, physical_device, surface)?;
 
@@ -575,8 +591,43 @@ impl HelloTriangleApplication {
         let swapchain =
             unsafe { khr_swapchain_device.create_swapchain(&swapchain_create_info, None)? };
         let swapchain_images = unsafe { khr_swapchain_device.get_swapchain_images(swapchain)? };
+        let mut swapchain_image_views = Vec::with_capacity(swapchain_images.len());
+        for image in swapchain_images.iter() {
+            let image_view_create_info = vk::ImageViewCreateInfo::default()
+                .image(*image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(surface_format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                })
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
 
-        Ok((swapchain, swapchain_images, surface_format.format, extent))
+            let image_view = unsafe {
+                device
+                    .create_image_view(&image_view_create_info, None)
+                    .context("Filed to create image view")?
+            };
+
+            swapchain_image_views.push(image_view);
+        }
+
+        Ok((
+            swapchain,
+            swapchain_images,
+            swapchain_image_views,
+            surface_format.format,
+            extent,
+        ))
     }
 }
 
@@ -588,6 +639,9 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.swapchain_images_views
+                .iter()
+                .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.khr_swapchain_device
                 .destroy_swapchain(self.swapchain, None);
             self.khr_surface_instance
