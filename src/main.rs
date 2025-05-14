@@ -35,6 +35,13 @@ impl QueueFamilyIndices {
     }
 }
 
+#[derive(Debug, Default)]
+struct SwapChainSupportDetails {
+    capabilities: vk::SurfaceCapabilitiesKHR,
+    formats: Vec<vk::SurfaceFormatKHR>,
+    present_modes: Vec<vk::PresentModeKHR>,
+}
+
 struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
@@ -340,7 +347,34 @@ impl HelloTriangleApplication {
             Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
         let extensions_supported = Self::check_device_extension_support(instance, physical_device)?;
 
-        Ok(queue_family_indices.is_complete() && extensions_supported)
+        let mut swap_chain_supported = false;
+        if extensions_supported {
+            let swap_chain_support =
+                Self::query_swap_chain_support(khr_surface_instance, physical_device, surface)?;
+            swap_chain_supported = !swap_chain_support.formats.is_empty()
+                && !swap_chain_support.present_modes.is_empty();
+        }
+
+        Ok(queue_family_indices.is_complete() && extensions_supported && swap_chain_supported)
+    }
+
+    fn query_swap_chain_support(
+        khr_surface_instance: &khr::surface::Instance,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) -> Result<SwapChainSupportDetails> {
+        let mut swap_chain_support_details = SwapChainSupportDetails::default();
+
+        unsafe {
+            swap_chain_support_details.capabilities = khr_surface_instance
+                .get_physical_device_surface_capabilities(physical_device, surface)?;
+            swap_chain_support_details.formats = khr_surface_instance
+                .get_physical_device_surface_formats(physical_device, surface)?;
+            swap_chain_support_details.present_modes = khr_surface_instance
+                .get_physical_device_surface_present_modes(physical_device, surface)?;
+        };
+
+        Ok(swap_chain_support_details)
     }
 
     fn find_queue_families(
