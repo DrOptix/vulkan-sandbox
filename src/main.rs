@@ -58,6 +58,9 @@ struct HelloTriangleApplication {
     _graphics_queue: vk::Queue,
     _present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
+    _swapchain_images: Vec<vk::Image>,
+    _swapchain_format: vk::Format,
+    _swapchain_extent: vk::Extent2D,
 }
 
 /// Public functions
@@ -92,14 +95,15 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
         let khr_swapchain_device = khr::swapchain::Device::new(&instance, &device);
-        let swapchain = Self::create_swap_chain(
-            &window,
-            &instance,
-            &khr_surface_instance,
-            &khr_swapchain_device,
-            physical_device,
-            window_surface,
-        )?;
+        let (swapchain, swapchain_images, swapchain_format, swapchain_extent) =
+            Self::create_swap_chain(
+                &window,
+                &instance,
+                &khr_surface_instance,
+                &khr_swapchain_device,
+                physical_device,
+                window_surface,
+            )?;
 
         Ok(Self {
             glfw,
@@ -117,6 +121,9 @@ impl HelloTriangleApplication {
             _graphics_queue: graphics_queue,
             _present_queue: present_queue,
             swapchain,
+            _swapchain_images: swapchain_images,
+            _swapchain_format: swapchain_format,
+            _swapchain_extent: swapchain_extent,
         })
     }
 
@@ -488,7 +495,7 @@ impl HelloTriangleApplication {
         khr_swapchain_device: &khr::swapchain::Device,
         physical_device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-    ) -> Result<vk::SwapchainKHR> {
+    ) -> Result<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
         let swap_chain_support =
             Self::query_swap_chain_support(khr_surface_instance, physical_device, surface)?;
 
@@ -567,8 +574,9 @@ impl HelloTriangleApplication {
 
         let swapchain =
             unsafe { khr_swapchain_device.create_swapchain(&swapchain_create_info, None)? };
+        let swapchain_images = unsafe { khr_swapchain_device.get_swapchain_images(swapchain)? };
 
-        Ok(swapchain)
+        Ok((swapchain, swapchain_images, surface_format.format, extent))
     }
 }
 
