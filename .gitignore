@@ -1,1 +1,3 @@
 /target
+shaders/shader.spirv.frag
+shaders/shader.spirv.vert

@@ -1,7 +1,8 @@
 use std::{
+    alloc::{Layout, alloc},
     borrow::Cow,
     ffi::{CStr, CString, c_char},
-    ptr,
+    ptr, slice,
 };
 
 use anyhow::{Context, Result};
@@ -111,6 +112,8 @@ impl HelloTriangleApplication {
             &device,
             window_surface,
         )?;
+
+        Self::create_graphics_pipeline(&device)?;
 
         Ok(Self {
             glfw,
@@ -628,6 +631,57 @@ impl HelloTriangleApplication {
             surface_format.format,
             extent,
         ))
+    }
+
+    fn create_graphics_pipeline(device: &ash::Device) -> Result<()> {
+        let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
+        let fragment_shader_spirv = include_bytes!("../shaders/shader.spirv.frag");
+
+        let vertex_shader_module = Self::create_shader_module(device, vertex_shader_spirv)?;
+        let fragment_shader_module = Self::create_shader_module(device, fragment_shader_spirv)?;
+
+        let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vertex_shader_module)
+            .name(c"main");
+
+        let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(fragment_shader_module)
+            .name(c"main");
+
+        let _shader_stages = [
+            vertex_shader_stage_create_info,
+            fragment_shader_stage_create_info,
+        ];
+
+        unsafe {
+            device.destroy_shader_module(vertex_shader_module, None);
+            device.destroy_shader_module(fragment_shader_module, None);
+        }
+
+        Ok(())
+    }
+
+    fn create_shader_module(device: &ash::Device, spirv_data: &[u8]) -> Result<vk::ShaderModule> {
+        let layout = Layout::from_size_align(spirv_data.len(), 4)?;
+        let pointer = unsafe { alloc(layout) };
+
+        if pointer.is_null() {
+            anyhow::bail!("Unable to allocate 4 byte alligned buffer");
+        }
+        let slice = unsafe { slice::from_raw_parts_mut(pointer, layout.size()) };
+        slice.copy_from_slice(spirv_data);
+
+        let shader_module_create_info = vk::ShaderModuleCreateInfo::default().code(unsafe {
+            let pointer: *const u32 = slice.as_ptr().cast();
+            let len = slice.len() / 4;
+            slice::from_raw_parts(pointer, len)
+        });
+        let shader_module =
+            unsafe { device.create_shader_module(&shader_module_create_info, None) }?;
+
+        Ok(shader_module)
     }
 }
 
