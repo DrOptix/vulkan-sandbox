@@ -663,6 +663,13 @@ impl HelloTriangleApplication {
             }
         }
 
+        // Vertex input
+        {
+            let _vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&[])
+                .vertex_attribute_descriptions(&[]);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
