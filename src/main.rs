@@ -634,30 +634,40 @@ impl HelloTriangleApplication {
     }
 
     fn create_graphics_pipeline(device: &ash::Device) -> Result<()> {
-        let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
-        let fragment_shader_spirv = include_bytes!("../shaders/shader.spirv.frag");
+        // Create vertex and fragment shaders
+        {
+            let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
+            let fragment_shader_spirv = include_bytes!("../shaders/shader.spirv.frag");
 
-        let vertex_shader_module = Self::create_shader_module(device, vertex_shader_spirv)?;
-        let fragment_shader_module = Self::create_shader_module(device, fragment_shader_spirv)?;
+            let vertex_shader_module = Self::create_shader_module(device, vertex_shader_spirv)?;
+            let fragment_shader_module = Self::create_shader_module(device, fragment_shader_spirv)?;
 
-        let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vertex_shader_module)
-            .name(c"main");
+            let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vertex_shader_module)
+                .name(c"main");
 
-        let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(fragment_shader_module)
-            .name(c"main");
+            let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_shader_module)
+                .name(c"main");
 
-        let _shader_stages = [
-            vertex_shader_stage_create_info,
-            fragment_shader_stage_create_info,
-        ];
+            let _shader_stages = [
+                vertex_shader_stage_create_info,
+                fragment_shader_stage_create_info,
+            ];
 
-        unsafe {
-            device.destroy_shader_module(vertex_shader_module, None);
-            device.destroy_shader_module(fragment_shader_module, None);
+            unsafe {
+                device.destroy_shader_module(vertex_shader_module, None);
+                device.destroy_shader_module(fragment_shader_module, None);
+            }
+        }
+
+        // Dynamic state
+        {
+            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+            let _dynamic_state_create_info =
+                vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
         }
 
         Ok(())
