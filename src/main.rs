@@ -670,6 +670,13 @@ impl HelloTriangleApplication {
                 .vertex_attribute_descriptions(&[]);
         }
 
+        // Input assembly
+        {
+            let _input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::default()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                .primitive_restart_enable(false);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
