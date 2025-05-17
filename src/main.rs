@@ -63,6 +63,7 @@ struct HelloTriangleApplication {
     swapchain_images_views: Vec<vk::ImageView>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
+    pipeline_layout: vk::PipelineLayout,
 }
 
 /// Public functions
@@ -113,7 +114,7 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
 
-        Self::create_graphics_pipeline(&device)?;
+        let pipeline_layout = Self::create_graphics_pipeline(&device)?;
 
         Ok(Self {
             glfw,
@@ -135,6 +136,7 @@ impl HelloTriangleApplication {
             swapchain_images_views: swapchain_image_views,
             _swapchain_format: swapchain_format,
             _swapchain_extent: swapchain_extent,
+            pipeline_layout,
         })
     }
 
@@ -633,7 +635,7 @@ impl HelloTriangleApplication {
         ))
     }
 
-    fn create_graphics_pipeline(device: &ash::Device) -> Result<()> {
+    fn create_graphics_pipeline(device: &ash::Device) -> Result<vk::PipelineLayout> {
         // Create vertex and fragment shaders
         {
             let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
@@ -723,7 +725,19 @@ impl HelloTriangleApplication {
                 vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
         }
 
-        Ok(())
+        let pipeline_layout = {
+            let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
+                .set_layouts(&[])
+                .push_constant_ranges(&[]);
+
+            unsafe {
+                device
+                    .create_pipeline_layout(&pipeline_layout_create_info, None)
+                    .context("Failed to create pipeline layout")
+            }?
+        };
+
+        Ok(pipeline_layout)
     }
 
     fn create_shader_module(device: &ash::Device, spirv_data: &[u8]) -> Result<vk::ShaderModule> {
@@ -756,6 +770,8 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
             self.swapchain_images_views
                 .iter()
                 .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
