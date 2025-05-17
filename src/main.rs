@@ -677,6 +677,13 @@ impl HelloTriangleApplication {
                 .primitive_restart_enable(false);
         }
 
+        // Viewport
+        {
+            let _viewport_create_info = vk::PipelineViewportStateCreateInfo::default()
+                .viewport_count(1)
+                .scissor_count(1);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
