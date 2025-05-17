@@ -684,6 +684,18 @@ impl HelloTriangleApplication {
                 .scissor_count(1);
         }
 
+        // Rasterizer
+        {
+            let _rasterizer_create_info = vk::PipelineRasterizationStateCreateInfo::default()
+                .depth_clamp_enable(false)
+                .rasterizer_discard_enable(false)
+                .polygon_mode(vk::PolygonMode::FILL)
+                .line_width(1.0)
+                .cull_mode(vk::CullModeFlags::BACK)
+                .front_face(vk::FrontFace::CLOCKWISE)
+                .depth_bias_enable(false);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
