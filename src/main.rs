@@ -703,6 +703,19 @@ impl HelloTriangleApplication {
                 .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         }
 
+        // Color blending
+        {
+            let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(false);
+
+            let _color_blending_create_info = vk::PipelineColorBlendStateCreateInfo::default()
+                .logic_op_enable(false)
+                .logic_op(vk::LogicOp::COPY)
+                .attachments(&[color_blend_attachment])
+                .blend_constants([0.0, 0.0, 0.0, 0.0]);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
