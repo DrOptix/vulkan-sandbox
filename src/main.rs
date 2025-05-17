@@ -696,6 +696,13 @@ impl HelloTriangleApplication {
                 .depth_bias_enable(false);
         }
 
+        // Multisampling
+        {
+            let _multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
+                .sample_shading_enable(false)
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        }
+
         // Dynamic state
         {
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
