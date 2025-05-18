@@ -63,10 +63,12 @@ struct HelloTriangleApplication {
     swapchain_images_views: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     _swapchain_format: vk::Format,
-    _swapchain_extent: vk::Extent2D,
+    swapchain_extent: vk::Extent2D,
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
 }
 
 /// Public functions
@@ -126,6 +128,15 @@ impl HelloTriangleApplication {
             swapchain_extent,
         )?;
 
+        let command_pool = Self::create_command_pool(
+            &instance,
+            &khr_surface_instance,
+            physical_device,
+            &device,
+            window_surface,
+        )?;
+        let command_buffer = Self::create_command_buffer(&device, command_pool)?;
+
         Ok(Self {
             glfw,
             window,
@@ -146,10 +157,12 @@ impl HelloTriangleApplication {
             swapchain_images_views: swapchain_image_views,
             swapchain_framebuffers,
             _swapchain_format: swapchain_format,
-            _swapchain_extent: swapchain_extent,
+            swapchain_extent,
             render_pass,
             pipeline_layout,
             pipeline,
+            command_pool,
+            command_buffer,
         })
     }
 
@@ -172,6 +185,74 @@ impl HelloTriangleApplication {
 
 /// Internal functions
 impl HelloTriangleApplication {
+    #[allow(dead_code)]
+    fn record_command_buffer(&self, image_index: usize) -> Result<()> {
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
+
+        unsafe {
+            self.device
+                .begin_command_buffer(self.command_buffer, &command_buffer_begin_info)
+                .context("Failed to being recording command buffer")?
+        };
+
+        let mut clear_color = vk::ClearValue::default();
+        clear_color.color.float32 = [0.0, 0.0, 0.0, 1.0];
+
+        let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(self.render_pass)
+            .framebuffer(self.swapchain_framebuffers[image_index])
+            .render_area(
+                vk::Rect2D::default()
+                    .offset(vk::Offset2D::default())
+                    .extent(self.swapchain_extent),
+            )
+            .clear_values(&[]);
+
+        unsafe {
+            self.device.cmd_begin_render_pass(
+                self.command_buffer,
+                &render_pass_begin_info,
+                vk::SubpassContents::INLINE,
+            );
+
+            self.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
+        };
+
+        let viewport = vk::Viewport::default()
+            .x(0.0)
+            .y(0.0)
+            .width(self.swapchain_extent.width as f32)
+            .height(self.swapchain_extent.height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0);
+
+        unsafe {
+            self.device
+                .cmd_set_viewport(self.command_buffer, 0, &[viewport]);
+        };
+
+        let scissor = vk::Rect2D::default()
+            .offset(vk::Offset2D::default().x(0).y(0))
+            .extent(self.swapchain_extent);
+
+        unsafe {
+            self.device
+                .cmd_set_scissor(self.command_buffer, 0, &[scissor]);
+            self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(self.command_buffer);
+
+            self.device
+                .end_command_buffer(self.command_buffer)
+                .context("Failed to render command buffer")?;
+        };
+
+        Ok(())
+    }
+
     fn create_window(
         glfw: &mut Glfw,
         width: u32,
@@ -842,6 +923,39 @@ impl HelloTriangleApplication {
 
         Ok(framebuffers)
     }
+
+    fn create_command_pool(
+        instance: &ash::Instance,
+        khr_surface_instance: &khr::surface::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        surface: vk::SurfaceKHR,
+    ) -> Result<vk::CommandPool> {
+        let queue_family_indices =
+            Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
+        let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(queue_family_indices.graphics_family.unwrap());
+
+        let command_pool = unsafe { device.create_command_pool(&command_pool_create_info, None)? };
+
+        Ok(command_pool)
+    }
+
+    fn create_command_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+    ) -> Result<vk::CommandBuffer> {
+        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        let command_buffer =
+            unsafe { device.allocate_command_buffers(&command_buffer_allocate_info)? };
+
+        Ok(command_buffer[0])
+    }
 }
 
 impl Drop for HelloTriangleApplication {
@@ -852,6 +966,7 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.device.destroy_command_pool(self.command_pool, None);
             self.swapchain_framebuffers
                 .iter()
                 .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
