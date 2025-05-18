@@ -65,6 +65,7 @@ struct HelloTriangleApplication {
     _swapchain_extent: vk::Extent2D,
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
 }
 
 /// Public functions
@@ -116,7 +117,7 @@ impl HelloTriangleApplication {
         )?;
 
         let render_pass = Self::create_render_pass(&device, swapchain_format)?;
-        let pipeline_layout = Self::create_graphics_pipeline(&device)?;
+        let (pipeline_layout ,pipeline) = Self::create_graphics_pipeline(&device, render_pass)?;
 
         Ok(Self {
             glfw,
@@ -140,6 +141,7 @@ impl HelloTriangleApplication {
             _swapchain_extent: swapchain_extent,
             render_pass,
             pipeline_layout,
+            pipeline,
         })
     }
 
@@ -670,95 +672,77 @@ impl HelloTriangleApplication {
         Ok(render_pass)
     }
 
-    fn create_graphics_pipeline(device: &ash::Device) -> Result<vk::PipelineLayout> {
+    fn create_graphics_pipeline(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+    ) -> Result<(vk::PipelineLayout, vk::Pipeline)> {
         // Create vertex and fragment shaders
-        {
-            let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
-            let fragment_shader_spirv = include_bytes!("../shaders/shader.spirv.frag");
+        let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
+        let fragment_shader_spirv = include_bytes!("../shaders/shader.spirv.frag");
 
-            let vertex_shader_module = Self::create_shader_module(device, vertex_shader_spirv)?;
-            let fragment_shader_module = Self::create_shader_module(device, fragment_shader_spirv)?;
+        let vertex_shader_module = Self::create_shader_module(device, vertex_shader_spirv)?;
+        let fragment_shader_module = Self::create_shader_module(device, fragment_shader_spirv)?;
 
-            let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex_shader_module)
-                .name(c"main");
+        let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vertex_shader_module)
+            .name(c"main");
 
-            let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader_module)
-                .name(c"main");
+        let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(fragment_shader_module)
+            .name(c"main");
 
-            let _shader_stages = [
-                vertex_shader_stage_create_info,
-                fragment_shader_stage_create_info,
-            ];
-
-            unsafe {
-                device.destroy_shader_module(vertex_shader_module, None);
-                device.destroy_shader_module(fragment_shader_module, None);
-            }
-        }
+        let shader_stages = [
+            vertex_shader_stage_create_info,
+            fragment_shader_stage_create_info,
+        ];
 
         // Vertex input
-        {
-            let _vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::default()
-                .vertex_binding_descriptions(&[])
-                .vertex_attribute_descriptions(&[]);
-        }
+        let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&[])
+            .vertex_attribute_descriptions(&[]);
 
         // Input assembly
-        {
-            let _input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::default()
-                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-                .primitive_restart_enable(false);
-        }
+        let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
 
         // Viewport
-        {
-            let _viewport_create_info = vk::PipelineViewportStateCreateInfo::default()
-                .viewport_count(1)
-                .scissor_count(1);
-        }
+        let viewport_create_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
 
         // Rasterizer
-        {
-            let _rasterizer_create_info = vk::PipelineRasterizationStateCreateInfo::default()
-                .depth_clamp_enable(false)
-                .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::FILL)
-                .line_width(1.0)
-                .cull_mode(vk::CullModeFlags::BACK)
-                .front_face(vk::FrontFace::CLOCKWISE)
-                .depth_bias_enable(false);
-        }
+        let rasterizer_create_info = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false);
 
         // Multisampling
-        {
-            let _multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
-                .sample_shading_enable(false)
-                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        }
+        let multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         // Color blending
-        {
-            let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(false);
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false);
 
-            let _color_blending_create_info = vk::PipelineColorBlendStateCreateInfo::default()
-                .logic_op_enable(false)
-                .logic_op(vk::LogicOp::COPY)
-                .attachments(&[color_blend_attachment])
-                .blend_constants([0.0, 0.0, 0.0, 0.0]);
-        }
+        let color_blending_create_info = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::COPY)
+            .attachments(slice::from_ref(&color_blend_attachment))
+            .blend_constants([0.0, 0.0, 0.0, 0.0]);
 
         // Dynamic state
-        {
-            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-            let _dynamic_state_create_info =
-                vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        }
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_create_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         let pipeline_layout = {
             let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
@@ -772,7 +756,39 @@ impl HelloTriangleApplication {
             }?
         };
 
-        Ok(pipeline_layout)
+        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_create_info)
+            .input_assembly_state(&input_assembly_create_info)
+            .viewport_state(&viewport_create_info)
+            .rasterization_state(&rasterizer_create_info)
+            .multisample_state(&multisample_create_info)
+            .color_blend_state(&color_blending_create_info)
+            .dynamic_state(&dynamic_state_create_info)
+            .layout(pipeline_layout)
+            .render_pass(render_pass)
+            .subpass(0)
+            .base_pipeline_handle(vk::Pipeline::null());
+
+        // Not the best thing to to, but I don't the mental energy to deal with it right now, so
+        // yeah, let that `unwrap()` in there
+        let graphics_pipeline = unsafe {
+            device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    slice::from_ref(&pipeline_create_info),
+                    None,
+                )
+                .unwrap()[0]
+        };
+
+        // Cleanup
+        unsafe {
+            device.destroy_shader_module(vertex_shader_module, None);
+            device.destroy_shader_module(fragment_shader_module, None);
+        }
+
+        Ok((pipeline_layout, graphics_pipeline))
     }
 
     fn create_shader_module(device: &ash::Device, spirv_data: &[u8]) -> Result<vk::ShaderModule> {
@@ -805,9 +821,10 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
-            self.device.destroy_render_pass(self.render_pass, None);
+            self.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_render_pass(self.render_pass, None);
             self.swapchain_images_views
                 .iter()
                 .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
