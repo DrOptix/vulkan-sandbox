@@ -61,6 +61,7 @@ struct HelloTriangleApplication {
     swapchain: vk::SwapchainKHR,
     _swapchain_images: Vec<vk::Image>,
     swapchain_images_views: Vec<vk::ImageView>,
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
     render_pass: vk::RenderPass,
@@ -117,7 +118,13 @@ impl HelloTriangleApplication {
         )?;
 
         let render_pass = Self::create_render_pass(&device, swapchain_format)?;
-        let (pipeline_layout ,pipeline) = Self::create_graphics_pipeline(&device, render_pass)?;
+        let (pipeline_layout, pipeline) = Self::create_graphics_pipeline(&device, render_pass)?;
+        let swapchain_framebuffers = Self::create_framebuffers(
+            &device,
+            render_pass,
+            &swapchain_image_views,
+            swapchain_extent,
+        )?;
 
         Ok(Self {
             glfw,
@@ -137,6 +144,7 @@ impl HelloTriangleApplication {
             swapchain,
             _swapchain_images: swapchain_images,
             swapchain_images_views: swapchain_image_views,
+            swapchain_framebuffers,
             _swapchain_format: swapchain_format,
             _swapchain_extent: swapchain_extent,
             render_pass,
@@ -811,6 +819,29 @@ impl HelloTriangleApplication {
 
         Ok(shader_module)
     }
+
+    fn create_framebuffers(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        swapchain_image_views: &[vk::ImageView],
+        swapchain_extent: vk::Extent2D,
+    ) -> Result<Vec<vk::Framebuffer>> {
+        let mut framebuffers = Vec::with_capacity(swapchain_image_views.len());
+
+        for image_view in swapchain_image_views {
+            let framebuffer_create_info = vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass)
+                .attachments(slice::from_ref(image_view))
+                .width(swapchain_extent.width)
+                .height(swapchain_extent.height)
+                .layers(1);
+
+            let framebuffer = unsafe { device.create_framebuffer(&framebuffer_create_info, None)? };
+            framebuffers.push(framebuffer);
+        }
+
+        Ok(framebuffers)
+    }
 }
 
 impl Drop for HelloTriangleApplication {
@@ -821,6 +852,9 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.swapchain_framebuffers
+                .iter()
+                .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
             self.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
