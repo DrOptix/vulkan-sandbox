@@ -63,6 +63,7 @@ struct HelloTriangleApplication {
     swapchain_images_views: Vec<vk::ImageView>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
+    render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
 }
 
@@ -114,6 +115,7 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
 
+        let render_pass = Self::create_render_pass(&device, swapchain_format)?;
         let pipeline_layout = Self::create_graphics_pipeline(&device)?;
 
         Ok(Self {
@@ -136,6 +138,7 @@ impl HelloTriangleApplication {
             swapchain_images_views: swapchain_image_views,
             _swapchain_format: swapchain_format,
             _swapchain_extent: swapchain_extent,
+            render_pass,
             pipeline_layout,
         })
     }
@@ -635,6 +638,38 @@ impl HelloTriangleApplication {
         ))
     }
 
+    fn create_render_pass(device: &ash::Device, format: vk::Format) -> Result<vk::RenderPass> {
+        let color_attachement = vk::AttachmentDescription::default()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+
+        let color_attackment_ref = vk::AttachmentReference::default()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(slice::from_ref(&color_attackment_ref));
+
+        let render_pass_create_info = vk::RenderPassCreateInfo::default()
+            .attachments(slice::from_ref(&color_attachement))
+            .subpasses(slice::from_ref(&subpass));
+
+        let render_pass = unsafe {
+            device
+                .create_render_pass(&render_pass_create_info, None)
+                .context("Failed to create render pass")?
+        };
+
+        Ok(render_pass)
+    }
+
     fn create_graphics_pipeline(device: &ash::Device) -> Result<vk::PipelineLayout> {
         // Create vertex and fragment shaders
         {
@@ -770,6 +805,7 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.device.destroy_render_pass(self.render_pass, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.swapchain_images_views
