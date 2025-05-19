@@ -6,17 +6,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use ash::{
-    ext::debug_utils,
-    khr,
-    vk::{self, PhysicalDevice},
-};
+use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
 
 fn main() {
     match HelloTriangleApplication::new(800, 600, "Hello triangle") {
         Ok(mut app) => {
-            app.run();
+            if let Err(err) = app.run() {
+                eprintln!("Error: {err}");
+            }
         }
         Err(err) => {
             eprint!("Error: {err}");
@@ -56,8 +54,8 @@ struct HelloTriangleApplication {
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
     _physical_device: vk::PhysicalDevice,
     device: ash::Device,
-    _graphics_queue: vk::Queue,
-    _present_queue: vk::Queue,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
     _swapchain_images: Vec<vk::Image>,
     swapchain_images_views: Vec<vk::ImageView>,
@@ -69,6 +67,9 @@ struct HelloTriangleApplication {
     pipeline: vk::Pipeline,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
+    image_available_semaphore: vk::Semaphore,
+    render_finished_semaphore: vk::Semaphore,
+    in_flight_fence: vk::Fence,
 }
 
 /// Public functions
@@ -136,6 +137,8 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
         let command_buffer = Self::create_command_buffer(&device, command_pool)?;
+        let (image_available_semaphore, render_finished_semaphore, in_flight_fence) =
+            Self::creat_sync_objects(&device)?;
 
         Ok(Self {
             glfw,
@@ -150,8 +153,8 @@ impl HelloTriangleApplication {
             debug_utils_messanger,
             _physical_device: physical_device,
             device,
-            _graphics_queue: graphics_queue,
-            _present_queue: present_queue,
+            graphics_queue,
+            present_queue,
             swapchain,
             _swapchain_images: swapchain_images,
             swapchain_images_views: swapchain_image_views,
@@ -163,10 +166,13 @@ impl HelloTriangleApplication {
             pipeline,
             command_pool,
             command_buffer,
+            image_available_semaphore,
+            render_finished_semaphore,
+            in_flight_fence,
         })
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<()> {
         self.window.set_key_polling(true);
 
         while !self.window.should_close() {
@@ -179,14 +185,98 @@ impl HelloTriangleApplication {
                     self.window.set_should_close(true)
                 }
             }
+
+            self.draw_frame()?;
         }
+
+        unsafe { self.device.device_wait_idle()? };
+
+        Ok(())
     }
 }
 
 /// Internal functions
 impl HelloTriangleApplication {
+    fn draw_frame(&self) -> Result<()> {
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.in_flight_fence], true, u64::MAX)
+                .context("Could not wait for fences")?;
+            self.device
+                .reset_fences(&[self.in_flight_fence])
+                .context("Could not reset fences")?;
+        };
+
+        let (image_index, _) = unsafe {
+            self.khr_swapchain_device
+                .acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    self.image_available_semaphore,
+                    vk::Fence::null(),
+                )
+                .context("Unable to aquire swapchain image")?
+        };
+
+        unsafe {
+            self.device
+                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .context("Unable to reset command buffer")?
+        };
+
+        self.record_command_buffer(image_index)?;
+
+        let wait_semaphores = [self.image_available_semaphore];
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let signal_semaphores = [self.render_finished_semaphore];
+        let command_buffers = [self.command_buffer];
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(&wait_semaphores)
+            .wait_dst_stage_mask(&wait_stages)
+            .command_buffers(&command_buffers)
+            .signal_semaphores(&signal_semaphores);
+
+        unsafe {
+            self.device
+                .queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence)
+                .context("Unable to submit queue")?
+        };
+
+        let present_info = vk::PresentInfoKHR::default()
+            .wait_semaphores(&signal_semaphores)
+            .swapchains(slice::from_ref(&self.swapchain))
+            .image_indices(slice::from_ref(&image_index));
+
+        unsafe {
+            self.khr_swapchain_device
+                .queue_present(self.present_queue, &present_info)?
+        };
+
+        Ok(())
+    }
+
+    fn creat_sync_objects(
+        device: &ash::Device,
+    ) -> Result<(vk::Semaphore, vk::Semaphore, vk::Fence)> {
+        let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+        let fence_create_info =
+            vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+        let image_available_semaphore =
+            unsafe { device.create_semaphore(&semaphore_create_info, None)? };
+        let render_finished_semaphore =
+            unsafe { device.create_semaphore(&semaphore_create_info, None)? };
+        let in_flight_fence = unsafe { device.create_fence(&fence_create_info, None)? };
+
+        Ok((
+            image_available_semaphore,
+            render_finished_semaphore,
+            in_flight_fence,
+        ))
+    }
+
     #[allow(dead_code)]
-    fn record_command_buffer(&self, image_index: usize) -> Result<()> {
+    fn record_command_buffer(&self, image_index: u32) -> Result<()> {
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
 
         unsafe {
@@ -200,13 +290,13 @@ impl HelloTriangleApplication {
 
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
-            .framebuffer(self.swapchain_framebuffers[image_index])
+            .framebuffer(self.swapchain_framebuffers[image_index as usize])
             .render_area(
                 vk::Rect2D::default()
                     .offset(vk::Offset2D::default())
                     .extent(self.swapchain_extent),
             )
-            .clear_values(&[]);
+            .clear_values(slice::from_ref(&clear_color));
 
         unsafe {
             self.device.cmd_begin_render_pass(
@@ -448,7 +538,7 @@ impl HelloTriangleApplication {
         instance: &ash::Instance,
         khr_surface_instance: &khr::surface::Instance,
         surface: vk::SurfaceKHR,
-    ) -> Result<PhysicalDevice> {
+    ) -> Result<vk::PhysicalDevice> {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
         if physical_devices.is_empty() {
@@ -748,9 +838,18 @@ impl HelloTriangleApplication {
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(slice::from_ref(&color_attackment_ref));
 
+        let subpass_dependency = vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+
         let render_pass_create_info = vk::RenderPassCreateInfo::default()
             .attachments(slice::from_ref(&color_attachement))
-            .subpasses(slice::from_ref(&subpass));
+            .subpasses(slice::from_ref(&subpass))
+            .dependencies(slice::from_ref(&subpass_dependency));
 
         let render_pass = unsafe {
             device
@@ -966,6 +1065,11 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.device
+                .destroy_semaphore(self.render_finished_semaphore, None);
+            self.device
+                .destroy_semaphore(self.image_available_semaphore, None);
+            self.device.destroy_fence(self.in_flight_fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.swapchain_framebuffers
                 .iter()
