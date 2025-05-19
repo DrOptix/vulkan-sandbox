@@ -13,13 +13,20 @@ fn main() {
     match HelloTriangleApplication::new(800, 600, "Hello triangle") {
         Ok(mut app) => {
             if let Err(err) = app.run() {
-                eprintln!("Error: {err}");
+                print_error(&err);
             }
         }
         Err(err) => {
-            eprint!("Error: {err}");
+            print_error(&err);
         }
     };
+}
+
+fn print_error(err: &anyhow::Error) {
+    eprintln!("Error: {err}");
+    for cause in err.chain() {
+        eprintln!("  - {cause}");
+    }
 }
 
 #[derive(Debug, Default)]
@@ -66,10 +73,11 @@ struct HelloTriangleApplication {
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
     command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    image_available_semaphore: vk::Semaphore,
-    render_finished_semaphore: vk::Semaphore,
-    in_flight_fence: vk::Fence,
+    command_buffers: Vec<vk::CommandBuffer>,
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+    current_frame: usize,
 }
 
 /// Public functions
@@ -136,9 +144,9 @@ impl HelloTriangleApplication {
             &device,
             window_surface,
         )?;
-        let command_buffer = Self::create_command_buffer(&device, command_pool)?;
-        let (image_available_semaphore, render_finished_semaphore, in_flight_fence) =
-            Self::creat_sync_objects(&device)?;
+        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
+        let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
+            Self::create_sync_objects(&device)?;
 
         Ok(Self {
             glfw,
@@ -165,10 +173,11 @@ impl HelloTriangleApplication {
             pipeline_layout,
             pipeline,
             command_pool,
-            command_buffer,
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
+            command_buffers,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            current_frame: 0,
         })
     }
 
@@ -197,13 +206,16 @@ impl HelloTriangleApplication {
 
 /// Internal functions
 impl HelloTriangleApplication {
-    fn draw_frame(&self) -> Result<()> {
+    const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+
+    fn draw_frame(&mut self) -> Result<()> {
+        let fences = [self.in_flight_fences[self.current_frame]];
         unsafe {
             self.device
-                .wait_for_fences(&[self.in_flight_fence], true, u64::MAX)
+                .wait_for_fences(&fences, true, u64::MAX)
                 .context("Could not wait for fences")?;
             self.device
-                .reset_fences(&[self.in_flight_fence])
+                .reset_fences(&fences)
                 .context("Could not reset fences")?;
         };
 
@@ -212,7 +224,7 @@ impl HelloTriangleApplication {
                 .acquire_next_image(
                     self.swapchain,
                     u64::MAX,
-                    self.image_available_semaphore,
+                    self.image_available_semaphores[self.current_frame],
                     vk::Fence::null(),
                 )
                 .context("Unable to aquire swapchain image")?
@@ -220,16 +232,19 @@ impl HelloTriangleApplication {
 
         unsafe {
             self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .reset_command_buffer(
+                    self.command_buffers[self.current_frame],
+                    vk::CommandBufferResetFlags::empty(),
+                )
                 .context("Unable to reset command buffer")?
         };
 
-        self.record_command_buffer(image_index)?;
+        self.record_command_buffer(self.command_buffers[self.current_frame], image_index)?;
 
-        let wait_semaphores = [self.image_available_semaphore];
+        let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let signal_semaphores = [self.render_finished_semaphore];
-        let command_buffers = [self.command_buffer];
+        let command_buffers = [self.command_buffers[self.current_frame]];
+        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
@@ -238,50 +253,82 @@ impl HelloTriangleApplication {
 
         unsafe {
             self.device
-                .queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence)
-                .context("Unable to submit queue")?
+                .queue_submit(
+                    self.graphics_queue,
+                    &[submit_info],
+                    self.in_flight_fences[self.current_frame],
+                )
+                .context("Failed to submit draw command buffer")?
         };
 
+        let swapchains = [self.swapchain];
+        let image_indices = [image_index];
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&signal_semaphores)
-            .swapchains(slice::from_ref(&self.swapchain))
-            .image_indices(slice::from_ref(&image_index));
+            .swapchains(&swapchains)
+            .image_indices(&image_indices);
 
         unsafe {
             self.khr_swapchain_device
                 .queue_present(self.present_queue, &present_info)?
         };
 
+        self.current_frame = (self.current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT as usize;
+
         Ok(())
     }
 
-    fn creat_sync_objects(
+    fn create_sync_objects(
         device: &ash::Device,
-    ) -> Result<(vk::Semaphore, vk::Semaphore, vk::Fence)> {
+    ) -> Result<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>)> {
+        let mut image_available_semaphores = Vec::default();
+        let mut render_finished_semaphores = Vec::default();
+        let mut in_flight_fences = Vec::default();
+
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
         let fence_create_info =
             vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-        let image_available_semaphore =
-            unsafe { device.create_semaphore(&semaphore_create_info, None)? };
-        let render_finished_semaphore =
-            unsafe { device.create_semaphore(&semaphore_create_info, None)? };
-        let in_flight_fence = unsafe { device.create_fence(&fence_create_info, None)? };
+        for _ in 0..Self::MAX_FRAMES_IN_FLIGHT {
+            let semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .context("Failed to create image available semaphore")?
+            };
+            image_available_semaphores.push(semaphore);
+
+            let semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .context("Failed to create render finished semaphore")?
+            };
+            render_finished_semaphores.push(semaphore);
+
+            let fence = unsafe {
+                device
+                    .create_fence(&fence_create_info, None)
+                    .context("Failed to create in flight fence")?
+            };
+            in_flight_fences.push(fence);
+        }
 
         Ok((
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
         ))
     }
 
-    #[allow(dead_code)]
-    fn record_command_buffer(&self, image_index: u32) -> Result<()> {
+    fn record_command_buffer(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        image_index: u32,
+    ) -> Result<()> {
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
 
         unsafe {
             self.device
-                .begin_command_buffer(self.command_buffer, &command_buffer_begin_info)
+                .begin_command_buffer(command_buffer, &command_buffer_begin_info)
                 .context("Failed to being recording command buffer")?
         };
 
@@ -300,13 +347,13 @@ impl HelloTriangleApplication {
 
         unsafe {
             self.device.cmd_begin_render_pass(
-                self.command_buffer,
+                command_buffer,
                 &render_pass_begin_info,
                 vk::SubpassContents::INLINE,
             );
 
             self.device.cmd_bind_pipeline(
-                self.command_buffer,
+                command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline,
             );
@@ -321,8 +368,7 @@ impl HelloTriangleApplication {
             .max_depth(1.0);
 
         unsafe {
-            self.device
-                .cmd_set_viewport(self.command_buffer, 0, &[viewport]);
+            self.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
         };
 
         let scissor = vk::Rect2D::default()
@@ -330,13 +376,12 @@ impl HelloTriangleApplication {
             .extent(self.swapchain_extent);
 
         unsafe {
-            self.device
-                .cmd_set_scissor(self.command_buffer, 0, &[scissor]);
-            self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
-            self.device.cmd_end_render_pass(self.command_buffer);
+            self.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            self.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(command_buffer);
 
             self.device
-                .end_command_buffer(self.command_buffer)
+                .end_command_buffer(command_buffer)
                 .context("Failed to render command buffer")?;
         };
 
@@ -1041,19 +1086,22 @@ impl HelloTriangleApplication {
         Ok(command_pool)
     }
 
-    fn create_command_buffer(
+    fn create_command_buffers(
         device: &ash::Device,
         command_pool: vk::CommandPool,
-    ) -> Result<vk::CommandBuffer> {
+    ) -> Result<Vec<vk::CommandBuffer>> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
+            .command_buffer_count(Self::MAX_FRAMES_IN_FLIGHT);
 
-        let command_buffer =
-            unsafe { device.allocate_command_buffers(&command_buffer_allocate_info)? };
+        let command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&command_buffer_allocate_info)
+                .context("Failed to allocate command buffers")?
+        };
 
-        Ok(command_buffer[0])
+        Ok(command_buffers)
     }
 }
 
@@ -1065,11 +1113,15 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
-            self.device
-                .destroy_semaphore(self.render_finished_semaphore, None);
-            self.device
-                .destroy_semaphore(self.image_available_semaphore, None);
-            self.device.destroy_fence(self.in_flight_fence, None);
+            self.render_finished_semaphores
+                .iter()
+                .for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
+            self.image_available_semaphores
+                .iter()
+                .for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
+            self.in_flight_fences
+                .iter()
+                .for_each(|fence| self.device.destroy_fence(*fence, None));
             self.device.destroy_command_pool(self.command_pool, None);
             self.swapchain_framebuffers
                 .iter()
