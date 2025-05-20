@@ -48,6 +48,39 @@ struct SwapChainSupportDetails {
     present_modes: Vec<vk::PresentModeKHR>,
 }
 
+#[repr(C)]
+struct Vertex {
+    pos: glm::Vec2,
+    color: glm::Vec3,
+}
+
+impl Vertex {
+    pub fn get_binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)
+    }
+
+    pub fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
+        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 2];
+
+        attribute_descriptions[0] = attribute_descriptions[0]
+            .binding(0)
+            .location(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, pos) as u32);
+
+        attribute_descriptions[1] = attribute_descriptions[1]
+            .binding(0)
+            .location(1)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, color) as u32);
+
+        attribute_descriptions
+    }
+}
+
 struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
@@ -79,6 +112,7 @@ struct HelloTriangleApplication {
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
     framebuffer_resized: bool,
+    _vertices: Vec<Vertex>,
 }
 
 /// Public functions
@@ -149,6 +183,21 @@ impl HelloTriangleApplication {
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device)?;
 
+        let vertices = vec![
+            Vertex {
+                pos: glm::vec2(0.0, -0.5),
+                color: glm::vec3(1.0, 0.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec2(0.5, 0.5),
+                color: glm::vec3(0.0, 1.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec2(-0.5, 0.5),
+                color: glm::vec3(0.0, 0.0, 1.0),
+            },
+        ];
+
         Ok(Self {
             glfw,
             window,
@@ -180,6 +229,7 @@ impl HelloTriangleApplication {
             in_flight_fences,
             current_frame: 0,
             framebuffer_resized: false,
+            _vertices: vertices,
         })
     }
 
@@ -305,8 +355,8 @@ impl HelloTriangleApplication {
 
     fn recreate_swapchain(&mut self) -> Result<()> {
         let (mut width, mut height) = self.window.get_framebuffer_size();
-            while width == 0 || height == 0 {
-            let (w,h) = self.window.get_framebuffer_size();
+        while width == 0 || height == 0 {
+            let (w, h) = self.window.get_framebuffer_size();
             width = w;
             height = h;
             self.glfw.wait_events();
@@ -1017,9 +1067,11 @@ impl HelloTriangleApplication {
         ];
 
         // Vertex input
+        let binding_descriptions = [Vertex::get_binding_description()];
+        let attribute_descriptions = Vertex::get_attribute_description();
         let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&[])
-            .vertex_attribute_descriptions(&[]);
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
         // Input assembly
         let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::default()
