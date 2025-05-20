@@ -78,6 +78,7 @@ struct HelloTriangleApplication {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
+    framebuffer_resized: bool,
 }
 
 /// Public functions
@@ -178,11 +179,13 @@ impl HelloTriangleApplication {
             render_finished_semaphores,
             in_flight_fences,
             current_frame: 0,
+            framebuffer_resized: false,
         })
     }
 
     pub fn run(&mut self) -> Result<()> {
         self.window.set_key_polling(true);
+        self.window.set_framebuffer_size_polling(true);
 
         while !self.window.should_close() {
             self.glfw.poll_events();
@@ -192,6 +195,8 @@ impl HelloTriangleApplication {
                 if let glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) = event
                 {
                     self.window.set_should_close(true)
+                } else if let glfw::WindowEvent::FramebufferSize(_, _) = event {
+                    self.framebuffer_resized = true;
                 }
             }
 
@@ -285,7 +290,10 @@ impl HelloTriangleApplication {
                 // Do nothing
             }
             Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate_swapchain()?;
+                if self.framebuffer_resized {
+                    self.framebuffer_resized = false;
+                    self.recreate_swapchain()?;
+                }
             }
             Err(err) => return Err(anyhow!(err)).context("Failed to present swapchain image"),
         };
@@ -296,6 +304,14 @@ impl HelloTriangleApplication {
     }
 
     fn recreate_swapchain(&mut self) -> Result<()> {
+        let (mut width, mut height) = self.window.get_framebuffer_size();
+            while width == 0 || height == 0 {
+            let (w,h) = self.window.get_framebuffer_size();
+            width = w;
+            height = h;
+            self.glfw.wait_events();
+        }
+
         unsafe {
             self.device.device_wait_idle()?;
         }
