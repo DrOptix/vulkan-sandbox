@@ -5,7 +5,7 @@ use std::{
     ptr, slice,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
 
@@ -59,15 +59,15 @@ struct HelloTriangleApplication {
     khr_swapchain_device: khr::swapchain::Device,
     debug_utils_instance: Option<debug_utils::Instance>,
     debug_utils_messanger: Option<vk::DebugUtilsMessengerEXT>,
-    _physical_device: vk::PhysicalDevice,
+    physical_device: vk::PhysicalDevice,
     device: ash::Device,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
-    _swapchain_images: Vec<vk::Image>,
+    swapchain_images: Vec<vk::Image>,
     swapchain_images_views: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
-    _swapchain_format: vk::Format,
+    swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
@@ -159,15 +159,15 @@ impl HelloTriangleApplication {
             khr_swapchain_device,
             debug_utils_instance,
             debug_utils_messanger,
-            _physical_device: physical_device,
+            physical_device,
             device,
             graphics_queue,
             present_queue,
             swapchain,
-            _swapchain_images: swapchain_images,
+            swapchain_images,
             swapchain_images_views: swapchain_image_views,
             swapchain_framebuffers,
-            _swapchain_format: swapchain_format,
+            swapchain_format,
             swapchain_extent,
             render_pass,
             pipeline_layout,
@@ -214,23 +214,30 @@ impl HelloTriangleApplication {
             self.device
                 .wait_for_fences(&fences, true, u64::MAX)
                 .context("Could not wait for fences")?;
-            self.device
-                .reset_fences(&fences)
-                .context("Could not reset fences")?;
+        }
+
+        let acquire_result = unsafe {
+            self.khr_swapchain_device.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                self.image_available_semaphores[self.current_frame],
+                vk::Fence::null(),
+            )
         };
 
-        let (image_index, _) = unsafe {
-            self.khr_swapchain_device
-                .acquire_next_image(
-                    self.swapchain,
-                    u64::MAX,
-                    self.image_available_semaphores[self.current_frame],
-                    vk::Fence::null(),
-                )
-                .context("Unable to aquire swapchain image")?
+        let image_index = match acquire_result {
+            Ok((image_index, _)) => image_index,
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                self.recreate_swapchain()?;
+                return Ok(());
+            }
+            Err(err) => return Err(anyhow!(err)).context("Failed to acquire swapchain image"),
         };
 
         unsafe {
+            self.device
+                .reset_fences(&fences)
+                .context("Could not reset fences")?;
             self.device
                 .reset_command_buffer(
                     self.command_buffers[self.current_frame],
@@ -268,14 +275,76 @@ impl HelloTriangleApplication {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        unsafe {
+        let present_result = unsafe {
             self.khr_swapchain_device
-                .queue_present(self.present_queue, &present_info)?
+                .queue_present(self.present_queue, &present_info)
+        };
+
+        match present_result {
+            Ok(false) => {
+                // Do nothing
+            }
+            Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                self.recreate_swapchain()?;
+            }
+            Err(err) => return Err(anyhow!(err)).context("Failed to present swapchain image"),
         };
 
         self.current_frame = (self.current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT as usize;
 
         Ok(())
+    }
+
+    fn recreate_swapchain(&mut self) -> Result<()> {
+        unsafe {
+            self.device.device_wait_idle()?;
+        }
+
+        self.cleanup_swapchain();
+
+        let (
+            swapchain,
+            swapchain_images,
+            swapchain_image_views,
+            swapchain_format,
+            swapchain_extent,
+        ) = Self::create_swap_chain(
+            &self.window,
+            &self.instance,
+            &self.khr_surface_instance,
+            &self.khr_swapchain_device,
+            self.physical_device,
+            &self.device,
+            self.window_surface,
+        )?;
+
+        self.swapchain = swapchain;
+        self.swapchain_images = swapchain_images;
+        self.swapchain_images_views = swapchain_image_views;
+        self.swapchain_format = swapchain_format;
+        self.swapchain_extent = swapchain_extent;
+
+        self.swapchain_framebuffers = Self::create_framebuffers(
+            &self.device,
+            self.render_pass,
+            &self.swapchain_images_views,
+            self.swapchain_extent,
+        )?;
+
+        Ok(())
+    }
+
+    fn cleanup_swapchain(&self) {
+        unsafe {
+            self.swapchain_framebuffers
+                .iter()
+                .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
+            self.swapchain_images_views
+                .iter()
+                .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
+            self.khr_swapchain_device
+                .destroy_swapchain(self.swapchain, None);
+        }
     }
 
     fn create_sync_objects(
@@ -395,7 +464,7 @@ impl HelloTriangleApplication {
         title: &str,
     ) -> Result<(glfw::PWindow, GlfwReceiver<(f64, glfw::WindowEvent)>)> {
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
-        glfw.window_hint(glfw::WindowHint::Resizable(false));
+        glfw.window_hint(glfw::WindowHint::Resizable(true));
 
         if let Some(window_and_events) =
             glfw.create_window(width, height, title, glfw::WindowMode::Windowed)
@@ -1113,6 +1182,7 @@ impl Drop for HelloTriangleApplication {
                     debug_utils_instance.destroy_debug_utils_messenger(debug_utils_messanger, None);
                 }
             }
+            self.cleanup_swapchain();
             self.render_finished_semaphores
                 .iter()
                 .for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
@@ -1123,18 +1193,10 @@ impl Drop for HelloTriangleApplication {
                 .iter()
                 .for_each(|fence| self.device.destroy_fence(*fence, None));
             self.device.destroy_command_pool(self.command_pool, None);
-            self.swapchain_framebuffers
-                .iter()
-                .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
             self.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
-            self.swapchain_images_views
-                .iter()
-                .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
-            self.khr_swapchain_device
-                .destroy_swapchain(self.swapchain, None);
             self.khr_surface_instance
                 .destroy_surface(self.window_surface, None);
             self.device.destroy_device(None);
