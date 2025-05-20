@@ -112,7 +112,9 @@ struct HelloTriangleApplication {
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
     framebuffer_resized: bool,
-    _vertices: Vec<Vertex>,
+    vertices: Vec<Vertex>,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
 }
 
 /// Public functions
@@ -172,21 +174,10 @@ impl HelloTriangleApplication {
             swapchain_extent,
         )?;
 
-        let command_pool = Self::create_command_pool(
-            &instance,
-            &khr_surface_instance,
-            physical_device,
-            &device,
-            window_surface,
-        )?;
-        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
-        let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
-            Self::create_sync_objects(&device)?;
-
         let vertices = vec![
             Vertex {
                 pos: glm::vec2(0.0, -0.5),
-                color: glm::vec3(1.0, 0.0, 0.0),
+                color: glm::vec3(1.0, 1.0, 1.0),
             },
             Vertex {
                 pos: glm::vec2(0.5, 0.5),
@@ -197,6 +188,19 @@ impl HelloTriangleApplication {
                 color: glm::vec3(0.0, 0.0, 1.0),
             },
         ];
+        let (vertex_buffer, vertex_buffer_memory) =
+            Self::create_vertex_buffer(&instance, physical_device, &device, &vertices)?;
+
+        let command_pool = Self::create_command_pool(
+            &instance,
+            &khr_surface_instance,
+            physical_device,
+            &device,
+            window_surface,
+        )?;
+        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
+        let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
+            Self::create_sync_objects(&device)?;
 
         Ok(Self {
             glfw,
@@ -229,7 +233,9 @@ impl HelloTriangleApplication {
             in_flight_fences,
             current_frame: 0,
             framebuffer_resized: false,
-            _vertices: vertices,
+            vertices,
+            vertex_buffer,
+            vertex_buffer_memory,
         })
     }
 
@@ -262,6 +268,70 @@ impl HelloTriangleApplication {
 /// Internal functions
 impl HelloTriangleApplication {
     const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+
+    fn create_vertex_buffer(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        vertices: &[Vertex],
+    ) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+        let vertex_buffer_create_info = vk::BufferCreateInfo::default()
+            .size(std::mem::size_of_val(vertices) as vk::DeviceSize)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let vertex_buffer = unsafe { device.create_buffer(&vertex_buffer_create_info, None)? };
+        let memory_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
+        let memory_type_index = Self::find_memory_type(
+            instance,
+            physical_device,
+            memory_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        let memory_alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(memory_type_index);
+        let vertex_buffer_memory = unsafe {
+            device
+                .allocate_memory(&memory_alloc_info, None)
+                .context("Failed to allocate vertex buffer memory")?
+        };
+
+        unsafe {
+            device.bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)?;
+            let data_ptr = device.map_memory(
+                vertex_buffer_memory,
+                0,
+                vertex_buffer_create_info.size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(vertices.as_ptr(), data_ptr as _, vertices.len());
+            device.unmap_memory(vertex_buffer_memory);
+        }
+
+        Ok((vertex_buffer, vertex_buffer_memory))
+    }
+
+    fn find_memory_type(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        filter_type: u32,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<u32> {
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        for i in 0..memory_properties.memory_type_count {
+            if (filter_type & (1 << i)) != 0
+                && (memory_properties.memory_types[i as usize].property_flags & properties)
+                    == properties
+            {
+                return Ok(i);
+            }
+        }
+
+        anyhow::bail!("Failed to find suitable memory type")
+    }
 
     fn draw_frame(&mut self) -> Result<()> {
         let fences = [self.in_flight_fences[self.current_frame]];
@@ -510,9 +580,15 @@ impl HelloTriangleApplication {
             .offset(vk::Offset2D::default().x(0).y(0))
             .extent(self.swapchain_extent);
 
+        let vertex_buffers = [self.vertex_buffer];
+        let offsets = [0];
+
         unsafe {
             self.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
-            self.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            self.device
+                .cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            self.device
+                .cmd_draw(command_buffer, self.vertices.len() as u32, 1, 0, 0);
             self.device.cmd_end_render_pass(command_buffer);
 
             self.device
@@ -1251,6 +1327,8 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.device.free_memory(self.vertex_buffer_memory, None);
             self.render_finished_semaphores
                 .iter()
                 .for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
