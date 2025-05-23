@@ -48,6 +48,40 @@ struct SwapChainSupportDetails {
     present_modes: Vec<vk::PresentModeKHR>,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone)]
+struct Vertex {
+    pos: glm::Vec2,
+    color: glm::Vec3,
+}
+
+impl Vertex {
+    pub fn get_binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)
+    }
+
+    pub fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
+        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 2];
+
+        attribute_descriptions[0] = attribute_descriptions[0]
+            .binding(0)
+            .location(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, pos) as u32);
+
+        attribute_descriptions[1] = attribute_descriptions[1]
+            .binding(0)
+            .location(1)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, color) as u32);
+
+        attribute_descriptions
+    }
+}
+
 struct HelloTriangleApplication {
     glfw: Glfw,
     window: glfw::PWindow,
@@ -65,7 +99,7 @@ struct HelloTriangleApplication {
     present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
-    swapchain_images_views: Vec<vk::ImageView>,
+    swapchain_image_views: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
@@ -79,6 +113,12 @@ struct HelloTriangleApplication {
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
     framebuffer_resized: bool,
+    _vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
+    index_buffer: vk::Buffer,
+    index_buffer_memory: vk::DeviceMemory,
 }
 
 /// Public functions
@@ -104,6 +144,9 @@ impl HelloTriangleApplication {
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
         let window_surface = Self::create_window_surface(&instance, &window)?;
+
+        Self::log_physical_devices(&instance)?;
+
         let physical_device =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
@@ -138,6 +181,29 @@ impl HelloTriangleApplication {
             swapchain_extent,
         )?;
 
+        let mut vertices = Vec::with_capacity(4);
+        vertices.extend_from_slice(&[
+            Vertex {
+                pos: glm::vec2(-0.5, -0.5),
+                color: glm::vec3(1.0, 0.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec2(0.5, -0.5),
+                color: glm::vec3(0.0, 1.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec2(0.5, 0.5),
+                color: glm::vec3(0.0, 0.0, 1.0),
+            },
+            Vertex {
+                pos: glm::vec2(-0.5, 0.5),
+                color: glm::vec3(1.0, 1.0, 1.0),
+            },
+        ]);
+
+        let mut indices = Vec::with_capacity(6);
+        indices.extend_from_slice(&[0, 1, 2, 2, 3, 0]);
+
         let command_pool = Self::create_command_pool(
             &instance,
             &khr_surface_instance,
@@ -147,7 +213,23 @@ impl HelloTriangleApplication {
         )?;
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
-            Self::create_sync_objects(&device)?;
+            Self::create_sync_objects(&device, swapchain_images.len())?;
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            &vertices,
+        )?;
+        let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            &indices,
+        )?;
 
         Ok(Self {
             glfw,
@@ -166,7 +248,7 @@ impl HelloTriangleApplication {
             present_queue,
             swapchain,
             swapchain_images,
-            swapchain_images_views: swapchain_image_views,
+            swapchain_image_views,
             swapchain_framebuffers,
             swapchain_format,
             swapchain_extent,
@@ -180,6 +262,12 @@ impl HelloTriangleApplication {
             in_flight_fences,
             current_frame: 0,
             framebuffer_resized: false,
+            _vertices: vertices,
+            indices,
+            vertex_buffer,
+            vertex_buffer_memory,
+            index_buffer,
+            index_buffer_memory,
         })
     }
 
@@ -212,6 +300,220 @@ impl HelloTriangleApplication {
 /// Internal functions
 impl HelloTriangleApplication {
     const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+
+    fn create_buffer(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        buffer_size: vk::DeviceSize,
+        buffer_usage: vk::BufferUsageFlags,
+        memory_properties: vk::MemoryPropertyFlags,
+    ) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+        let create_info = vk::BufferCreateInfo::default()
+            .size(buffer_size)
+            .usage(buffer_usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&create_info, None)? };
+        let memory_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let memory_type_index = Self::find_memory_type(
+            instance,
+            physical_device,
+            memory_requirements.memory_type_bits,
+            memory_properties,
+        )?;
+        let buffer_memory = unsafe {
+            device
+                .allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(memory_requirements.size)
+                        .memory_type_index(memory_type_index),
+                    None,
+                )
+                .context("Failed to allocate vertex buffer memory")?
+        };
+
+        unsafe {
+            device.bind_buffer_memory(buffer, buffer_memory, 0)?;
+        }
+
+        Ok((buffer, buffer_memory))
+    }
+
+    fn create_vertex_buffer(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        vertices: &[Vertex],
+    ) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+        let buffer_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        unsafe {
+            let data_ptr = device.map_memory(
+                staging_buffer_memory,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(vertices.as_ptr(), data_ptr as _, vertices.len());
+            device.unmap_memory(staging_buffer_memory);
+        }
+
+        let (vertex_buffer, vertex_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        Self::copy_buffer(
+            device,
+            command_pool,
+            queue,
+            staging_buffer,
+            vertex_buffer,
+            buffer_size,
+        )?;
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        Ok((vertex_buffer, vertex_buffer_memory))
+    }
+
+    fn create_index_buffer(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        indices: &[u32],
+    ) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+        let buffer_size = std::mem::size_of_val(indices) as vk::DeviceSize;
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        unsafe {
+            let data_ptr = device.map_memory(
+                staging_buffer_memory,
+                0,
+                buffer_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(indices.as_ptr(), data_ptr as _, indices.len());
+            device.unmap_memory(staging_buffer_memory);
+        }
+
+        let (index_buffer, index_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        Self::copy_buffer(
+            device,
+            command_pool,
+            queue,
+            staging_buffer,
+            index_buffer,
+            buffer_size,
+        )?;
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        Ok((index_buffer, index_buffer_memory))
+    }
+
+    fn copy_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        source: vk::Buffer,
+        destination: vk::Buffer,
+        size: vk::DeviceSize,
+    ) -> Result<()> {
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(command_pool)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info)?[0] };
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(command_buffer, &begin_info)?;
+            device.cmd_copy_buffer(
+                command_buffer,
+                source,
+                destination,
+                &[vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(size)],
+            );
+            device.end_command_buffer(command_buffer)?;
+        }
+
+        let command_buffers = [command_buffer];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+        unsafe {
+            device.queue_submit(queue, &[submit_info], vk::Fence::null())?;
+            device.queue_wait_idle(queue)?;
+            device.free_command_buffers(command_pool, &command_buffers);
+        }
+
+        Ok(())
+    }
+
+    fn find_memory_type(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        filter_type: u32,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<u32> {
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        for i in 0..memory_properties.memory_type_count {
+            if (filter_type & (1 << i)) != 0
+                && (memory_properties.memory_types[i as usize].property_flags & properties)
+                    == properties
+            {
+                return Ok(i);
+            }
+        }
+
+        anyhow::bail!("Failed to find suitable memory type")
+    }
 
     fn draw_frame(&mut self) -> Result<()> {
         let fences = [self.in_flight_fences[self.current_frame]];
@@ -256,7 +558,7 @@ impl HelloTriangleApplication {
         let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let command_buffers = [self.command_buffers[self.current_frame]];
-        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
+        let signal_semaphores = [self.render_finished_semaphores[image_index as usize]];
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
@@ -305,8 +607,8 @@ impl HelloTriangleApplication {
 
     fn recreate_swapchain(&mut self) -> Result<()> {
         let (mut width, mut height) = self.window.get_framebuffer_size();
-            while width == 0 || height == 0 {
-            let (w,h) = self.window.get_framebuffer_size();
+        while width == 0 || height == 0 {
+            let (w, h) = self.window.get_framebuffer_size();
             width = w;
             height = h;
             self.glfw.wait_events();
@@ -336,14 +638,14 @@ impl HelloTriangleApplication {
 
         self.swapchain = swapchain;
         self.swapchain_images = swapchain_images;
-        self.swapchain_images_views = swapchain_image_views;
+        self.swapchain_image_views = swapchain_image_views;
         self.swapchain_format = swapchain_format;
         self.swapchain_extent = swapchain_extent;
 
         self.swapchain_framebuffers = Self::create_framebuffers(
             &self.device,
             self.render_pass,
-            &self.swapchain_images_views,
+            &self.swapchain_image_views,
             self.swapchain_extent,
         )?;
 
@@ -355,7 +657,7 @@ impl HelloTriangleApplication {
             self.swapchain_framebuffers
                 .iter()
                 .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
-            self.swapchain_images_views
+            self.swapchain_image_views
                 .iter()
                 .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.khr_swapchain_device
@@ -365,10 +667,12 @@ impl HelloTriangleApplication {
 
     fn create_sync_objects(
         device: &ash::Device,
+        swapchain_images_count: usize,
     ) -> Result<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>)> {
-        let mut image_available_semaphores = Vec::default();
-        let mut render_finished_semaphores = Vec::default();
-        let mut in_flight_fences = Vec::default();
+        let mut image_available_semaphores =
+            Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT as usize);
+        let mut render_finished_semaphores = Vec::with_capacity(swapchain_images_count);
+        let mut in_flight_fences = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT as usize);
 
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
         let fence_create_info =
@@ -382,19 +686,21 @@ impl HelloTriangleApplication {
             };
             image_available_semaphores.push(semaphore);
 
-            let semaphore = unsafe {
-                device
-                    .create_semaphore(&semaphore_create_info, None)
-                    .context("Failed to create render finished semaphore")?
-            };
-            render_finished_semaphores.push(semaphore);
-
             let fence = unsafe {
                 device
                     .create_fence(&fence_create_info, None)
                     .context("Failed to create in flight fence")?
             };
             in_flight_fences.push(fence);
+        }
+
+        for _ in 0..swapchain_images_count {
+            let semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .context("Failed to create render finished semaphore")?
+            };
+            render_finished_semaphores.push(semaphore);
         }
 
         Ok((
@@ -418,7 +724,7 @@ impl HelloTriangleApplication {
         };
 
         let mut clear_color = vk::ClearValue::default();
-        clear_color.color.float32 = [0.0, 0.0, 0.0, 1.0];
+        clear_color.color.float32 = [0.025, 0.025, 0.025, 1.0];
 
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
@@ -460,9 +766,21 @@ impl HelloTriangleApplication {
             .offset(vk::Offset2D::default().x(0).y(0))
             .extent(self.swapchain_extent);
 
+        let vertex_buffers = [self.vertex_buffer];
+        let offsets = [0];
+
         unsafe {
             self.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
-            self.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            self.device
+                .cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets);
+            self.device.cmd_bind_index_buffer(
+                command_buffer,
+                self.index_buffer,
+                0,
+                vk::IndexType::UINT32,
+            );
+            self.device
+                .cmd_draw_indexed(command_buffer, self.indices.len() as u32, 1, 0, 0, 0);
             self.device.cmd_end_render_pass(command_buffer);
 
             self.device
@@ -682,6 +1000,44 @@ impl HelloTriangleApplication {
         }
 
         anyhow::bail!("Unable to find a suitable device");
+    }
+
+    fn log_physical_devices(instance: &ash::Instance) -> Result<()> {
+        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+
+        for (i, physical_device) in physical_devices.into_iter().enumerate() {
+            println!("Physical Device {i}");
+
+            // Get the physical device properties
+            let physical_device_properties =
+                unsafe { instance.get_physical_device_properties(physical_device) };
+
+            let device_name = unsafe {
+                std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
+            };
+            println!("  Device Name: {}", device_name.to_str().unwrap());
+
+            // Get the queue family properties
+            let queue_family_properties =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+            for (j, queue_family_property) in queue_family_properties.into_iter().enumerate() {
+                println!("  Queue Family {j}");
+
+                println!("    Queue Flags: {:?}", queue_family_property.queue_flags);
+                println!("    Queue Count: {}", queue_family_property.queue_count);
+                println!(
+                    "    Timestamp Valid Bits: {}",
+                    queue_family_property.timestamp_valid_bits
+                );
+                println!(
+                    "    Min Image Transfer Granularity: {:?}",
+                    queue_family_property.min_image_transfer_granularity
+                );
+            }
+        }
+
+        Ok(())
     }
 
     fn is_device_suitable(
@@ -1017,9 +1373,11 @@ impl HelloTriangleApplication {
         ];
 
         // Vertex input
+        let binding_descriptions = [Vertex::get_binding_description()];
+        let attribute_descriptions = Vertex::get_attribute_description();
         let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&[])
-            .vertex_attribute_descriptions(&[]);
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
         // Input assembly
         let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -1199,6 +1557,10 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
+            self.device.destroy_buffer(self.vertex_buffer, None);
+            self.device.free_memory(self.vertex_buffer_memory, None);
+            self.device.destroy_buffer(self.index_buffer, None);
+            self.device.free_memory(self.index_buffer_memory, None);
             self.render_finished_semaphores
                 .iter()
                 .for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
