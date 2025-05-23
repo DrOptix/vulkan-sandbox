@@ -140,6 +140,9 @@ impl HelloTriangleApplication {
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
         let window_surface = Self::create_window_surface(&instance, &window)?;
+
+        Self::log_physical_devices(&instance)?;
+
         let physical_device =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
@@ -913,6 +916,44 @@ impl HelloTriangleApplication {
         }
 
         anyhow::bail!("Unable to find a suitable device");
+    }
+
+    fn log_physical_devices(instance: &ash::Instance) -> Result<()> {
+        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+
+        for (i, physical_device) in physical_devices.into_iter().enumerate() {
+            println!("Physical Device {i}");
+
+            // Get the physical device properties
+            let physical_device_properties =
+                unsafe { instance.get_physical_device_properties(physical_device) };
+
+            let device_name = unsafe {
+                std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
+            };
+            println!("  Device Name: {}", device_name.to_str().unwrap());
+
+            // Get the queue family properties
+            let queue_family_properties =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+            for (j, queue_family_property) in queue_family_properties.into_iter().enumerate() {
+                println!("  Queue Family {j}");
+
+                println!("    Queue Flags: {:?}", queue_family_property.queue_flags);
+                println!("    Queue Count: {}", queue_family_property.queue_count);
+                println!(
+                    "    Timestamp Valid Bits: {}",
+                    queue_family_property.timestamp_valid_bits
+                );
+                println!(
+                    "    Min Image Transfer Granularity: {:?}",
+                    queue_family_property.min_image_transfer_granularity
+                );
+            }
+        }
+
+        Ok(())
     }
 
     fn is_device_suitable(
