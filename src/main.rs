@@ -98,7 +98,7 @@ struct HelloTriangleApplication {
     present_queue: vk::Queue,
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
-    swapchain_images_views: Vec<vk::ImageView>,
+    swapchain_image_views: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
@@ -200,7 +200,7 @@ impl HelloTriangleApplication {
         )?;
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
-            Self::create_sync_objects(&device)?;
+            Self::create_sync_objects(&device, swapchain_images.len())?;
 
         Ok(Self {
             glfw,
@@ -219,7 +219,7 @@ impl HelloTriangleApplication {
             present_queue,
             swapchain,
             swapchain_images,
-            swapchain_images_views: swapchain_image_views,
+            swapchain_image_views,
             swapchain_framebuffers,
             swapchain_format,
             swapchain_extent,
@@ -376,7 +376,7 @@ impl HelloTriangleApplication {
         let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let command_buffers = [self.command_buffers[self.current_frame]];
-        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
+        let signal_semaphores = [self.render_finished_semaphores[image_index as usize]];
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
@@ -456,14 +456,14 @@ impl HelloTriangleApplication {
 
         self.swapchain = swapchain;
         self.swapchain_images = swapchain_images;
-        self.swapchain_images_views = swapchain_image_views;
+        self.swapchain_image_views = swapchain_image_views;
         self.swapchain_format = swapchain_format;
         self.swapchain_extent = swapchain_extent;
 
         self.swapchain_framebuffers = Self::create_framebuffers(
             &self.device,
             self.render_pass,
-            &self.swapchain_images_views,
+            &self.swapchain_image_views,
             self.swapchain_extent,
         )?;
 
@@ -475,7 +475,7 @@ impl HelloTriangleApplication {
             self.swapchain_framebuffers
                 .iter()
                 .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
-            self.swapchain_images_views
+            self.swapchain_image_views
                 .iter()
                 .for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.khr_swapchain_device
@@ -485,10 +485,12 @@ impl HelloTriangleApplication {
 
     fn create_sync_objects(
         device: &ash::Device,
+        swapchain_images_count: usize,
     ) -> Result<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>)> {
-        let mut image_available_semaphores = Vec::default();
-        let mut render_finished_semaphores = Vec::default();
-        let mut in_flight_fences = Vec::default();
+        let mut image_available_semaphores =
+            Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT as usize);
+        let mut render_finished_semaphores = Vec::with_capacity(swapchain_images_count);
+        let mut in_flight_fences = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT as usize);
 
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
         let fence_create_info =
@@ -502,19 +504,21 @@ impl HelloTriangleApplication {
             };
             image_available_semaphores.push(semaphore);
 
-            let semaphore = unsafe {
-                device
-                    .create_semaphore(&semaphore_create_info, None)
-                    .context("Failed to create render finished semaphore")?
-            };
-            render_finished_semaphores.push(semaphore);
-
             let fence = unsafe {
                 device
                     .create_fence(&fence_create_info, None)
                     .context("Failed to create in flight fence")?
             };
             in_flight_fences.push(fence);
+        }
+
+        for _ in 0..swapchain_images_count {
+            let semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .context("Failed to create render finished semaphore")?
+            };
+            render_finished_semaphores.push(semaphore);
         }
 
         Ok((
