@@ -752,23 +752,30 @@ impl HelloTriangleApplication {
         let duration = current_time - self.start_time;
         let duration = duration.as_secs_f32();
 
+        let model = glm::ext::rotate(
+            &glm::Mat4::one(),
+            duration * glm::radians(90.0),
+            glm::vec3(0.0, 0.0, 1.0),
+        );
+        let view = glm::ext::look_at(
+            glm::vec3(2.0, 2.0, 2.0),
+            glm::vec3(0.0, 0.0, 0.0),
+            glm::vec3(0.0, 0.0, 1.0),
+        );
+
+        let mut projection = glm::ext::perspective(
+            glm::radians(45.0),
+            self.swapchain_extent.width as f32 / self.swapchain_extent.height as f32,
+            0.1,
+            10.0,
+        );
+
+        projection[1][1] *= -1.0;
+
         let ubo = UniformBufferObject {
-            model: glm::ext::rotate(
-                &glm::Mat4::one(),
-                duration * glm::radians(90.0),
-                glm::vec3(0.0, 0.0, 1.0),
-            ),
-            view: glm::ext::look_at(
-                glm::vec3(2.0, 2.0, 2.0),
-                glm::vec3(0.0, 0.0, 0.0),
-                glm::vec3(0.0, 0.0, 1.0),
-            ),
-            projection: glm::ext::perspective(
-                glm::radians(45.0),
-                self.swapchain_extent.width as f32 / self.swapchain_extent.height as f32,
-                0.1,
-                10.0,
-            ),
+            model,
+            view,
+            projection,
         };
 
         unsafe {
@@ -1595,7 +1602,7 @@ impl HelloTriangleApplication {
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 
         // Multisampling
