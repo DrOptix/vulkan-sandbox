@@ -8,3 +8,4 @@ anyhow = "1.0.98"
 ash = "0.38.0"
 glfw = { version = "0.59.0", features = ["vulkan"] }
 glm = "0.2.3"
+num-traits = "0.2.19"

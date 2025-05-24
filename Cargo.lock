@@ -392,6 +392,7 @@ dependencies = [
  "ash",
  "glfw",
  "glm",
+ "num-traits",
 ]
 
 [[package]]
