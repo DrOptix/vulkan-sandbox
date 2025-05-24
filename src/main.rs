@@ -133,6 +133,8 @@ struct HelloTriangleApplication {
     uniform_buffers: Vec<vk::Buffer>,
     uniform_buffers_memory: Vec<vk::DeviceMemory>,
     uniform_buffers_mapped: Vec<*mut std::ffi::c_void>,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 /// Public functions
@@ -248,6 +250,13 @@ impl HelloTriangleApplication {
         )?;
         let (uniform_buffers, uniform_buffers_memory, uniform_buffers_mapped) =
             Self::create_uniform_buffers(&instance, physical_device, &device)?;
+        let descriptor_pool = Self::create_descriptor_pool(&device)?;
+        let descriptor_sets = Self::create_descriptor_sets(
+            &device,
+            descriptor_set_layout,
+            descriptor_pool,
+            &uniform_buffers,
+        )?;
 
         Ok(Self {
             start_time: std::time::Instant::now(),
@@ -291,6 +300,8 @@ impl HelloTriangleApplication {
             uniform_buffers,
             uniform_buffers_memory,
             uniform_buffers_mapped,
+            descriptor_pool,
+            descriptor_sets,
         })
     }
 
@@ -517,6 +528,65 @@ impl HelloTriangleApplication {
             uniform_buffers_memory,
             uniform_buffers_mapped,
         ))
+    }
+
+    fn create_descriptor_pool(device: &ash::Device) -> Result<vk::DescriptorPool> {
+        let pool_size = vk::DescriptorPoolSize::default()
+            .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
+            .ty(vk::DescriptorType::UNIFORM_BUFFER);
+        let pool_sizes = [pool_size];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(Self::MAX_FRAMES_IN_FLIGHT);
+
+        let descriptor_pool = unsafe {
+            device
+                .create_descriptor_pool(&pool_info, None)
+                .context("Failed to create descriptor pool")?
+        };
+
+        Ok(descriptor_pool)
+    }
+
+    fn create_descriptor_sets(
+        device: &ash::Device,
+        descriptor_set_layout: vk::DescriptorSetLayout,
+        descriptor_pool: vk::DescriptorPool,
+        uniform_buffers: &[vk::Buffer],
+    ) -> Result<Vec<vk::DescriptorSet>> {
+        let layouts = [descriptor_set_layout, descriptor_set_layout];
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&layouts);
+
+        let descriptor_sets = unsafe {
+            device
+                .allocate_descriptor_sets(&alloc_info)
+                .context("Failed to allocate descriptor sets")?
+        };
+
+        for i in 0..Self::MAX_FRAMES_IN_FLIGHT {
+            let buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(uniform_buffers[i as usize])
+                .offset(0)
+                .range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize);
+            let buffer_infos = [buffer_info];
+
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[i as usize])
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .buffer_info(&buffer_infos);
+            let descriptor_writes = [descriptor_write];
+
+            unsafe {
+                device.update_descriptor_sets(&descriptor_writes, &[]);
+            }
+        }
+
+        Ok(descriptor_sets)
     }
 
     fn copy_buffer(
@@ -873,6 +943,7 @@ impl HelloTriangleApplication {
 
         let vertex_buffers = [self.vertex_buffer];
         let offsets = [0];
+        let descriptor_sets = [self.descriptor_sets[self.current_frame]];
 
         unsafe {
             self.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
@@ -883,6 +954,14 @@ impl HelloTriangleApplication {
                 self.index_buffer,
                 0,
                 vk::IndexType::UINT32,
+            );
+            self.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline_layout,
+                0,
+                &descriptor_sets,
+                &[],
             );
             self.device
                 .cmd_draw_indexed(command_buffer, self.indices.len() as u32, 1, 0, 0, 0);
@@ -1684,6 +1763,8 @@ impl Drop for HelloTriangleApplication {
             self.uniform_buffers_memory
                 .iter()
                 .for_each(|buffer_memory| self.device.free_memory(*buffer_memory, None));
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
