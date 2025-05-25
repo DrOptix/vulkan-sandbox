@@ -2,6 +2,7 @@ use std::{
     alloc::{Layout, alloc},
     borrow::Cow,
     ffi::{CStr, CString, c_char},
+    path::Path,
     ptr, slice,
 };
 
@@ -135,6 +136,8 @@ struct HelloTriangleApplication {
     uniform_buffers_mapped: Vec<*mut std::ffi::c_void>,
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets: Vec<vk::DescriptorSet>,
+    image: vk::Image,
+    image_memory: vk::DeviceMemory,
 }
 
 /// Public functions
@@ -232,6 +235,12 @@ impl HelloTriangleApplication {
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device, swapchain_images.len())?;
+        let (image, image_memory) = Self::create_texture_image(
+            &instance,
+            physical_device,
+            &device,
+            Path::new("./textures/texture.png"),
+        )?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
             physical_device,
@@ -302,6 +311,8 @@ impl HelloTriangleApplication {
             uniform_buffers_mapped,
             descriptor_pool,
             descriptor_sets,
+            image,
+            image_memory,
         })
     }
 
@@ -372,6 +383,111 @@ impl HelloTriangleApplication {
         }
 
         Ok((buffer, buffer_memory))
+    }
+
+    fn create_texture_image(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        path: &Path,
+    ) -> Result<(vk::Image, vk::DeviceMemory)> {
+        let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
+        let image_size = (4 * image.width() * image.height()) as vk::DeviceSize;
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            image_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        unsafe {
+            let data_ptr = device.map_memory(
+                staging_buffer_memory,
+                0,
+                image_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(
+                image.as_bytes().as_ptr(),
+                data_ptr as _,
+                image.as_bytes().len(),
+            );
+            device.unmap_memory(staging_buffer_memory);
+        };
+
+        let (image, image_memory) = Self::create_image(
+            instance,
+            physical_device,
+            device,
+            image.width(),
+            image.height(),
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        Ok((image, image_memory))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_image(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<(vk::Image, vk::DeviceMemory)> {
+        let create_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D::default().width(width).height(height).depth(1))
+            .mip_levels(1)
+            .array_layers(1)
+            .format(format)
+            .tiling(tiling)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(usage)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let image = unsafe {
+            device
+                .create_image(&create_info, None)
+                .context("Failed to create image")?
+        };
+
+        let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(Self::find_memory_type(
+                instance,
+                physical_device,
+                memory_requirements.memory_type_bits,
+                properties,
+            )?);
+
+        let image_memory = unsafe {
+            device
+                .allocate_memory(&alloc_info, None)
+                .context("Failed to allocate image memory")?
+        };
+
+        unsafe {
+            device.bind_image_memory(image, image_memory, 0)?;
+        }
+
+        Ok((image, image_memory))
     }
 
     fn create_vertex_buffer(
@@ -1764,6 +1880,8 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
+            self.device.destroy_image(self.image, None);
+            self.device.free_memory(self.image_memory, None);
             self.uniform_buffers
                 .iter()
                 .for_each(|buffer| self.device.destroy_buffer(*buffer, None));
