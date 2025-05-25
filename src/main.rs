@@ -449,8 +449,8 @@ impl HelloTriangleApplication {
             device,
             command_pool,
             queue,
-            image,
             staging_buffer,
+            image,
             width,
             height,
         )?;
@@ -782,13 +782,12 @@ impl HelloTriangleApplication {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn copy_buffer_to_image(
         device: &ash::Device,
         command_pool: vk::CommandPool,
         queue: vk::Queue,
-        image: vk::Image,
         buffer: vk::Buffer,
+        image: vk::Image,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -860,7 +859,7 @@ impl HelloTriangleApplication {
         new_layout: vk::ImageLayout,
     ) -> Result<()> {
         let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
-        let memory_barier = vk::ImageMemoryBarrier::default()
+        let mut memory_barier = vk::ImageMemoryBarrier::default()
             .old_layout(old_layout)
             .new_layout(new_layout)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -869,7 +868,7 @@ impl HelloTriangleApplication {
             .subresource_range(
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(1)
+                    .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
                     .layer_count(1),
@@ -877,11 +876,35 @@ impl HelloTriangleApplication {
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::empty());
 
+        let (source_stage, destination_stage) = if old_layout == vk::ImageLayout::UNDEFINED
+            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        {
+            memory_barier.src_access_mask = vk::AccessFlags::empty();
+            memory_barier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+
+            (
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+            )
+        } else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        {
+            memory_barier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            memory_barier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+            (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            )
+        } else {
+            anyhow::bail!("Unsupported layout transition");
+        };
+
         unsafe {
             device.cmd_pipeline_barrier(
                 command_buffer,
-                vk::PipelineStageFlags::empty(),
-                vk::PipelineStageFlags::empty(),
+                source_stage,
+                destination_stage,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
