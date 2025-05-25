@@ -136,8 +136,9 @@ struct HelloTriangleApplication {
     uniform_buffers_mapped: Vec<*mut std::ffi::c_void>,
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets: Vec<vk::DescriptorSet>,
-    image: vk::Image,
-    image_memory: vk::DeviceMemory,
+    texture_image: vk::Image,
+    texture_image_memory: vk::DeviceMemory,
+    texture_image_view: vk::ImageView,
 }
 
 /// Public functions
@@ -235,7 +236,7 @@ impl HelloTriangleApplication {
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device, swapchain_images.len())?;
-        let (image, image_memory) = Self::create_texture_image(
+        let (texture_image, texture_image_memory) = Self::create_texture_image(
             &instance,
             physical_device,
             &device,
@@ -243,6 +244,7 @@ impl HelloTriangleApplication {
             graphics_queue,
             Path::new("./textures/texture.png"),
         )?;
+        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
             physical_device,
@@ -313,8 +315,9 @@ impl HelloTriangleApplication {
             uniform_buffers_mapped,
             descriptor_pool,
             descriptor_sets,
-            image,
-            image_memory,
+            texture_image,
+            texture_image_memory,
+            texture_image_view,
         })
     }
 
@@ -471,6 +474,38 @@ impl HelloTriangleApplication {
         }
 
         Ok((image, image_memory))
+    }
+
+    fn create_texture_image_view(device: &ash::Device, image: vk::Image) -> Result<vk::ImageView> {
+        let texture_image_view = Self::create_image_view(device, image, vk::Format::R8G8B8A8_SRGB)?;
+        Ok(texture_image_view)
+    }
+
+    fn create_image_view(
+        device: &ash::Device,
+        image: vk::Image,
+        format: vk::Format,
+    ) -> Result<vk::ImageView> {
+        let create_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            );
+
+        let image_view = unsafe {
+            device
+                .create_image_view(&create_info, None)
+                .context("Failed to crate texture image view")?
+        };
+
+        Ok(image_view)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1743,31 +1778,7 @@ impl HelloTriangleApplication {
         let swapchain_images = unsafe { khr_swapchain_device.get_swapchain_images(swapchain)? };
         let mut swapchain_image_views = Vec::with_capacity(swapchain_images.len());
         for image in swapchain_images.iter() {
-            let image_view_create_info = vk::ImageViewCreateInfo::default()
-                .image(*image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(surface_format.format)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                })
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let image_view = unsafe {
-                device
-                    .create_image_view(&image_view_create_info, None)
-                    .context("Filed to create image view")?
-            };
-
+            let image_view = Self::create_image_view(device, *image, surface_format.format)?;
             swapchain_image_views.push(image_view);
         }
 
@@ -2048,8 +2059,9 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
-            self.device.destroy_image(self.image, None);
-            self.device.free_memory(self.image_memory, None);
+            self.device.destroy_image_view(self.texture_image_view, None);
+            self.device.destroy_image(self.texture_image, None);
+            self.device.free_memory(self.texture_image_memory, None);
             self.uniform_buffers
                 .iter()
                 .for_each(|buffer| self.device.destroy_buffer(*buffer, None));
