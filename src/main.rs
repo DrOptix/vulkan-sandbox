@@ -746,6 +746,47 @@ impl HelloTriangleApplication {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    fn copy_buffer_to_image(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        image: vk::Image,
+        buffer: vk::Buffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        let region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D::default())
+            .image_extent(vk::Extent3D::default().width(width).height(height).depth(1));
+
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                command_buffer,
+                buffer,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            )
+        };
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
+
+        Ok(())
+    }
+
     fn copy_buffer(
         device: &ash::Device,
         command_pool: vk::CommandPool,
