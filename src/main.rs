@@ -705,14 +705,10 @@ impl HelloTriangleApplication {
         Ok(descriptor_sets)
     }
 
-    fn copy_buffer(
+    fn begin_single_time_commands(
         device: &ash::Device,
         command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        source: vk::Buffer,
-        destination: vk::Buffer,
-        size: vk::DeviceSize,
-    ) -> Result<()> {
+    ) -> Result<vk::CommandBuffer> {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(command_pool)
@@ -725,17 +721,18 @@ impl HelloTriangleApplication {
 
         unsafe {
             device.begin_command_buffer(command_buffer, &begin_info)?;
-            device.cmd_copy_buffer(
-                command_buffer,
-                source,
-                destination,
-                &[vk::BufferCopy::default()
-                    .src_offset(0)
-                    .dst_offset(0)
-                    .size(size)],
-            );
-            device.end_command_buffer(command_buffer)?;
         }
+
+        Ok(command_buffer)
+    }
+
+    fn end_single_time_commands(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        command_buffer: vk::CommandBuffer,
+    ) -> Result<()> {
+        unsafe { device.end_command_buffer(command_buffer)? };
 
         let command_buffers = [command_buffer];
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
@@ -745,6 +742,79 @@ impl HelloTriangleApplication {
             device.queue_wait_idle(queue)?;
             device.free_command_buffers(command_pool, &command_buffers);
         }
+
+        Ok(())
+    }
+
+    fn copy_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        source: vk::Buffer,
+        destination: vk::Buffer,
+        size: vk::DeviceSize,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        unsafe {
+            device.cmd_copy_buffer(
+                command_buffer,
+                source,
+                destination,
+                &[vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(size)],
+            );
+        }
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn transition_image_layout(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        image: vk::Image,
+        _format: vk::Format,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        let memory_barier = vk::ImageMemoryBarrier::default()
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(1)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::empty());
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::empty(),
+                vk::PipelineStageFlags::empty(),
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[memory_barier],
+            );
+        }
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
 
         Ok(())
     }
