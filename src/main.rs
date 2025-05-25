@@ -239,6 +239,8 @@ impl HelloTriangleApplication {
             &instance,
             physical_device,
             &device,
+            command_pool,
+            graphics_queue,
             Path::new("./textures/texture.png"),
         )?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
@@ -389,10 +391,14 @@ impl HelloTriangleApplication {
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
         device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
         path: &Path,
     ) -> Result<(vk::Image, vk::DeviceMemory)> {
         let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
-        let image_size = (4 * image.width() * image.height()) as vk::DeviceSize;
+        let width = image.width();
+        let height = image.height();
+        let image_size = (4 * width * height) as vk::DeviceSize;
         let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
             instance,
             physical_device,
@@ -421,12 +427,42 @@ impl HelloTriangleApplication {
             instance,
             physical_device,
             device,
-            image.width(),
-            image.height(),
+            width,
+            height,
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            queue,
+            image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        )?;
+
+        Self::copy_buffer_to_image(
+            device,
+            command_pool,
+            queue,
+            image,
+            staging_buffer,
+            width,
+            height,
+        )?;
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            queue,
+            image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         )?;
 
         unsafe {
@@ -814,7 +850,6 @@ impl HelloTriangleApplication {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn transition_image_layout(
         device: &ash::Device,
         command_pool: vk::CommandPool,
@@ -825,7 +860,6 @@ impl HelloTriangleApplication {
         new_layout: vk::ImageLayout,
     ) -> Result<()> {
         let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
-
         let memory_barier = vk::ImageMemoryBarrier::default()
             .old_layout(old_layout)
             .new_layout(new_layout)
