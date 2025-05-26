@@ -556,6 +556,16 @@ impl HelloTriangleApplication {
             vk::ImageAspectFlags::DEPTH,
         )?;
 
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            queue,
+            depth_image,
+            depth_format,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        )?;
+
         Ok((depth_image, depth_image_memory, depth_image_view))
     }
 
@@ -1129,6 +1139,17 @@ impl HelloTriangleApplication {
             (
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,
+            )
+        } else if old_layout == vk::ImageLayout::UNDEFINED
+            && new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        {
+            memory_barier.src_access_mask = vk::AccessFlags::empty();
+            memory_barier.dst_access_mask = vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
+
+            (
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
             )
         } else {
             anyhow::bail!("Unsupported layout transition");
