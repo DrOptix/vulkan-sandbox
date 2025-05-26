@@ -2,6 +2,7 @@ use std::{
     alloc::{Layout, alloc},
     borrow::Cow,
     ffi::{CStr, CString, c_char},
+    path::Path,
     ptr, slice,
 };
 
@@ -54,6 +55,7 @@ struct SwapChainSupportDetails {
 struct Vertex {
     pos: glm::Vec2,
     color: glm::Vec3,
+    tex_coord: glm::Vec2,
 }
 
 impl Vertex {
@@ -65,7 +67,7 @@ impl Vertex {
     }
 
     pub fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
-        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 2];
+        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 3];
 
         attribute_descriptions[0] = attribute_descriptions[0]
             .binding(0)
@@ -78,6 +80,12 @@ impl Vertex {
             .location(1)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(std::mem::offset_of!(Vertex, color) as u32);
+
+        attribute_descriptions[2] = attribute_descriptions[2]
+            .binding(0)
+            .location(2)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, tex_coord) as u32);
 
         attribute_descriptions
     }
@@ -135,6 +143,10 @@ struct HelloTriangleApplication {
     uniform_buffers_mapped: Vec<*mut std::ffi::c_void>,
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets: Vec<vk::DescriptorSet>,
+    texture_image: vk::Image,
+    texture_image_memory: vk::DeviceMemory,
+    texture_image_view: vk::ImageView,
+    texture_sampler: vk::Sampler,
 }
 
 /// Public functions
@@ -204,18 +216,22 @@ impl HelloTriangleApplication {
             Vertex {
                 pos: glm::vec2(-0.5, -0.5),
                 color: glm::vec3(1.0, 0.0, 0.0),
+                tex_coord: glm::vec2(1.0, 0.0),
             },
             Vertex {
                 pos: glm::vec2(0.5, -0.5),
                 color: glm::vec3(0.0, 1.0, 0.0),
+                tex_coord: glm::vec2(0.0, 0.0),
             },
             Vertex {
                 pos: glm::vec2(0.5, 0.5),
                 color: glm::vec3(0.0, 0.0, 1.0),
+                tex_coord: glm::vec2(0.0, 1.0),
             },
             Vertex {
                 pos: glm::vec2(-0.5, 0.5),
                 color: glm::vec3(1.0, 1.0, 1.0),
+                tex_coord: glm::vec2(1.0, 1.0),
             },
         ]);
 
@@ -232,6 +248,16 @@ impl HelloTriangleApplication {
         let command_buffers = Self::create_command_buffers(&device, command_pool)?;
         let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
             Self::create_sync_objects(&device, swapchain_images.len())?;
+        let (texture_image, texture_image_memory) = Self::create_texture_image(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            Path::new("./textures/texture.png"),
+        )?;
+        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
+        let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
             physical_device,
@@ -256,6 +282,8 @@ impl HelloTriangleApplication {
             descriptor_set_layout,
             descriptor_pool,
             &uniform_buffers,
+            texture_image_view,
+            texture_sampler,
         )?;
 
         Ok(Self {
@@ -302,6 +330,10 @@ impl HelloTriangleApplication {
             uniform_buffers_mapped,
             descriptor_pool,
             descriptor_sets,
+            texture_image,
+            texture_image_memory,
+            texture_image_view,
+            texture_sampler,
         })
     }
 
@@ -372,6 +404,209 @@ impl HelloTriangleApplication {
         }
 
         Ok((buffer, buffer_memory))
+    }
+
+    fn create_texture_image(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        path: &Path,
+    ) -> Result<(vk::Image, vk::DeviceMemory)> {
+        let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
+        let width = image.width();
+        let height = image.height();
+        let image_size = (4 * width * height) as vk::DeviceSize;
+        let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
+            instance,
+            physical_device,
+            device,
+            image_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        unsafe {
+            let data_ptr = device.map_memory(
+                staging_buffer_memory,
+                0,
+                image_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(
+                image.as_bytes().as_ptr(),
+                data_ptr as _,
+                image.as_bytes().len(),
+            );
+            device.unmap_memory(staging_buffer_memory);
+        };
+
+        let (image, image_memory) = Self::create_image(
+            instance,
+            physical_device,
+            device,
+            width,
+            height,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            queue,
+            image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        )?;
+
+        Self::copy_buffer_to_image(
+            device,
+            command_pool,
+            queue,
+            staging_buffer,
+            image,
+            width,
+            height,
+        )?;
+
+        Self::transition_image_layout(
+            device,
+            command_pool,
+            queue,
+            image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        )?;
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
+        }
+
+        Ok((image, image_memory))
+    }
+
+    fn create_texture_image_view(device: &ash::Device, image: vk::Image) -> Result<vk::ImageView> {
+        let texture_image_view = Self::create_image_view(device, image, vk::Format::R8G8B8A8_SRGB)?;
+        Ok(texture_image_view)
+    }
+
+    fn create_texture_sampler(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<vk::Sampler> {
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
+        let create_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(true)
+            .max_anisotropy(properties.limits.max_sampler_anisotropy)
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(0.0);
+
+        let sampler = unsafe {
+            device
+                .create_sampler(&create_info, None)
+                .context("Failed to crate texture sampler")?
+        };
+
+        Ok(sampler)
+    }
+
+    fn create_image_view(
+        device: &ash::Device,
+        image: vk::Image,
+        format: vk::Format,
+    ) -> Result<vk::ImageView> {
+        let create_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            );
+
+        let image_view = unsafe {
+            device
+                .create_image_view(&create_info, None)
+                .context("Failed to crate texture image view")?
+        };
+
+        Ok(image_view)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_image(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<(vk::Image, vk::DeviceMemory)> {
+        let create_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D::default().width(width).height(height).depth(1))
+            .mip_levels(1)
+            .array_layers(1)
+            .format(format)
+            .tiling(tiling)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(usage)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let image = unsafe {
+            device
+                .create_image(&create_info, None)
+                .context("Failed to create image")?
+        };
+
+        let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(Self::find_memory_type(
+                instance,
+                physical_device,
+                memory_requirements.memory_type_bits,
+                properties,
+            )?);
+
+        let image_memory = unsafe {
+            device
+                .allocate_memory(&alloc_info, None)
+                .context("Failed to allocate image memory")?
+        };
+
+        unsafe {
+            device.bind_image_memory(image, image_memory, 0)?;
+        }
+
+        Ok((image, image_memory))
     }
 
     fn create_vertex_buffer(
@@ -531,10 +766,14 @@ impl HelloTriangleApplication {
     }
 
     fn create_descriptor_pool(device: &ash::Device) -> Result<vk::DescriptorPool> {
-        let pool_size = vk::DescriptorPoolSize::default()
-            .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
-            .ty(vk::DescriptorType::UNIFORM_BUFFER);
-        let pool_sizes = [pool_size];
+        let pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
+                .ty(vk::DescriptorType::UNIFORM_BUFFER),
+            vk::DescriptorPoolSize::default()
+                .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(Self::MAX_FRAMES_IN_FLIGHT);
@@ -553,6 +792,8 @@ impl HelloTriangleApplication {
         descriptor_set_layout: vk::DescriptorSetLayout,
         descriptor_pool: vk::DescriptorPool,
         uniform_buffers: &[vk::Buffer],
+        texture_image_view: vk::ImageView,
+        texture_sampler: vk::Sampler,
     ) -> Result<Vec<vk::DescriptorSet>> {
         let layouts = [descriptor_set_layout, descriptor_set_layout];
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
@@ -572,14 +813,28 @@ impl HelloTriangleApplication {
                 .range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize);
             let buffer_infos = [buffer_info];
 
-            let descriptor_write = vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_sets[i as usize])
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .buffer_info(&buffer_infos);
-            let descriptor_writes = [descriptor_write];
+            let image_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(texture_image_view)
+                .sampler(texture_sampler);
+            let image_infos = [image_info];
+
+            let descriptor_writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[i as usize])
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .buffer_info(&buffer_infos),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[i as usize])
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .image_info(&image_infos),
+            ];
 
             unsafe {
                 device.update_descriptor_sets(&descriptor_writes, &[]);
@@ -589,14 +844,10 @@ impl HelloTriangleApplication {
         Ok(descriptor_sets)
     }
 
-    fn copy_buffer(
+    fn begin_single_time_commands(
         device: &ash::Device,
         command_pool: vk::CommandPool,
-        queue: vk::Queue,
-        source: vk::Buffer,
-        destination: vk::Buffer,
-        size: vk::DeviceSize,
-    ) -> Result<()> {
+    ) -> Result<vk::CommandBuffer> {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(command_pool)
@@ -609,17 +860,18 @@ impl HelloTriangleApplication {
 
         unsafe {
             device.begin_command_buffer(command_buffer, &begin_info)?;
-            device.cmd_copy_buffer(
-                command_buffer,
-                source,
-                destination,
-                &[vk::BufferCopy::default()
-                    .src_offset(0)
-                    .dst_offset(0)
-                    .size(size)],
-            );
-            device.end_command_buffer(command_buffer)?;
         }
+
+        Ok(command_buffer)
+    }
+
+    fn end_single_time_commands(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        command_buffer: vk::CommandBuffer,
+    ) -> Result<()> {
+        unsafe { device.end_command_buffer(command_buffer)? };
 
         let command_buffers = [command_buffer];
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
@@ -629,6 +881,141 @@ impl HelloTriangleApplication {
             device.queue_wait_idle(queue)?;
             device.free_command_buffers(command_pool, &command_buffers);
         }
+
+        Ok(())
+    }
+
+    fn copy_buffer_to_image(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        buffer: vk::Buffer,
+        image: vk::Image,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        let region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D::default())
+            .image_extent(vk::Extent3D::default().width(width).height(height).depth(1));
+
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                command_buffer,
+                buffer,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            )
+        };
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
+
+        Ok(())
+    }
+
+    fn copy_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        source: vk::Buffer,
+        destination: vk::Buffer,
+        size: vk::DeviceSize,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        unsafe {
+            device.cmd_copy_buffer(
+                command_buffer,
+                source,
+                destination,
+                &[vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(size)],
+            );
+        }
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
+
+        Ok(())
+    }
+
+    fn transition_image_layout(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        image: vk::Image,
+        _format: vk::Format,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+        let mut memory_barier = vk::ImageMemoryBarrier::default()
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::empty());
+
+        let (source_stage, destination_stage) = if old_layout == vk::ImageLayout::UNDEFINED
+            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        {
+            memory_barier.src_access_mask = vk::AccessFlags::empty();
+            memory_barier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+
+            (
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+            )
+        } else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        {
+            memory_barier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            memory_barier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+            (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            )
+        } else {
+            anyhow::bail!("Unsupported layout transition");
+        };
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                command_buffer,
+                source_stage,
+                destination_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[memory_barier],
+            );
+        }
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)?;
 
         Ok(())
     }
@@ -1240,6 +1627,7 @@ impl HelloTriangleApplication {
         let queue_family_indices =
             Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
         let extensions_supported = Self::check_device_extension_support(instance, physical_device)?;
+        let supported_features = unsafe { instance.get_physical_device_features(physical_device) };
 
         let mut swap_chain_supported = false;
         if extensions_supported {
@@ -1249,7 +1637,10 @@ impl HelloTriangleApplication {
                 && !swap_chain_support.present_modes.is_empty();
         }
 
-        Ok(queue_family_indices.is_complete() && extensions_supported && swap_chain_supported)
+        Ok(queue_family_indices.is_complete()
+            && extensions_supported
+            && swap_chain_supported
+            && supported_features.sampler_anisotropy > 0)
     }
 
     fn query_swap_chain_support(
@@ -1332,7 +1723,7 @@ impl HelloTriangleApplication {
                         .queue_family_index(queue_family_indices.present_family.unwrap()),
                 ]
             };
-        let device_features = vk::PhysicalDeviceFeatures::default();
+        let device_features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
         let extensions = ["VK_KHR_swapchain".to_string()];
         let extensions: Vec<CString> = extensions
             .iter()
@@ -1459,31 +1850,7 @@ impl HelloTriangleApplication {
         let swapchain_images = unsafe { khr_swapchain_device.get_swapchain_images(swapchain)? };
         let mut swapchain_image_views = Vec::with_capacity(swapchain_images.len());
         for image in swapchain_images.iter() {
-            let image_view_create_info = vk::ImageViewCreateInfo::default()
-                .image(*image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(surface_format.format)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                })
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let image_view = unsafe {
-                device
-                    .create_image_view(&image_view_create_info, None)
-                    .context("Filed to create image view")?
-            };
-
+            let image_view = Self::create_image_view(device, *image, surface_format.format)?;
             swapchain_image_views.push(image_view);
         }
 
@@ -1539,11 +1906,18 @@ impl HelloTriangleApplication {
 
     fn create_descriptor_set_layout(device: &ash::Device) -> Result<vk::DescriptorSetLayout> {
         let ubo_layout = vk::DescriptorSetLayoutBinding::default()
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
             .binding(0)
-            .descriptor_count(1);
-        let layouts = [ubo_layout];
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+
+        let sampler_layout = vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let layouts = [ubo_layout, sampler_layout];
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layouts);
         let descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&create_info, None)? };
@@ -1764,6 +2138,11 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
+            self.device.destroy_sampler(self.texture_sampler, None);
+            self.device
+                .destroy_image_view(self.texture_image_view, None);
+            self.device.destroy_image(self.texture_image, None);
+            self.device.free_memory(self.texture_image_memory, None);
             self.uniform_buffers
                 .iter()
                 .for_each(|buffer| self.device.destroy_buffer(*buffer, None));
