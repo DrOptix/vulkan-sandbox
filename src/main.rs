@@ -55,6 +55,7 @@ struct SwapChainSupportDetails {
 struct Vertex {
     pos: glm::Vec2,
     color: glm::Vec3,
+    tex_coord: glm::Vec2,
 }
 
 impl Vertex {
@@ -66,7 +67,7 @@ impl Vertex {
     }
 
     pub fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
-        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 2];
+        let mut attribute_descriptions = vec![vk::VertexInputAttributeDescription::default(); 3];
 
         attribute_descriptions[0] = attribute_descriptions[0]
             .binding(0)
@@ -79,6 +80,12 @@ impl Vertex {
             .location(1)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(std::mem::offset_of!(Vertex, color) as u32);
+
+        attribute_descriptions[2] = attribute_descriptions[2]
+            .binding(0)
+            .location(2)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(std::mem::offset_of!(Vertex, tex_coord) as u32);
 
         attribute_descriptions
     }
@@ -209,18 +216,22 @@ impl HelloTriangleApplication {
             Vertex {
                 pos: glm::vec2(-0.5, -0.5),
                 color: glm::vec3(1.0, 0.0, 0.0),
+                tex_coord: glm::vec2(1.0, 0.0),
             },
             Vertex {
                 pos: glm::vec2(0.5, -0.5),
                 color: glm::vec3(0.0, 1.0, 0.0),
+                tex_coord: glm::vec2(0.0, 0.0),
             },
             Vertex {
                 pos: glm::vec2(0.5, 0.5),
                 color: glm::vec3(0.0, 0.0, 1.0),
+                tex_coord: glm::vec2(0.0, 1.0),
             },
             Vertex {
                 pos: glm::vec2(-0.5, 0.5),
                 color: glm::vec3(1.0, 1.0, 1.0),
+                tex_coord: glm::vec2(1.0, 1.0),
             },
         ]);
 
@@ -271,6 +282,8 @@ impl HelloTriangleApplication {
             descriptor_set_layout,
             descriptor_pool,
             &uniform_buffers,
+            texture_image_view,
+            texture_sampler,
         )?;
 
         Ok(Self {
@@ -753,10 +766,14 @@ impl HelloTriangleApplication {
     }
 
     fn create_descriptor_pool(device: &ash::Device) -> Result<vk::DescriptorPool> {
-        let pool_size = vk::DescriptorPoolSize::default()
-            .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
-            .ty(vk::DescriptorType::UNIFORM_BUFFER);
-        let pool_sizes = [pool_size];
+        let pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
+                .ty(vk::DescriptorType::UNIFORM_BUFFER),
+            vk::DescriptorPoolSize::default()
+                .descriptor_count(Self::MAX_FRAMES_IN_FLIGHT)
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+        ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(Self::MAX_FRAMES_IN_FLIGHT);
@@ -775,6 +792,8 @@ impl HelloTriangleApplication {
         descriptor_set_layout: vk::DescriptorSetLayout,
         descriptor_pool: vk::DescriptorPool,
         uniform_buffers: &[vk::Buffer],
+        texture_image_view: vk::ImageView,
+        texture_sampler: vk::Sampler,
     ) -> Result<Vec<vk::DescriptorSet>> {
         let layouts = [descriptor_set_layout, descriptor_set_layout];
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
@@ -794,14 +813,28 @@ impl HelloTriangleApplication {
                 .range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize);
             let buffer_infos = [buffer_info];
 
-            let descriptor_write = vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_sets[i as usize])
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .buffer_info(&buffer_infos);
-            let descriptor_writes = [descriptor_write];
+            let image_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(texture_image_view)
+                .sampler(texture_sampler);
+            let image_infos = [image_info];
+
+            let descriptor_writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[i as usize])
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .buffer_info(&buffer_infos),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[i as usize])
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .image_info(&image_infos),
+            ];
 
             unsafe {
                 device.update_descriptor_sets(&descriptor_writes, &[]);
@@ -1873,11 +1906,18 @@ impl HelloTriangleApplication {
 
     fn create_descriptor_set_layout(device: &ash::Device) -> Result<vk::DescriptorSetLayout> {
         let ubo_layout = vk::DescriptorSetLayoutBinding::default()
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
             .binding(0)
-            .descriptor_count(1);
-        let layouts = [ubo_layout];
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+
+        let sampler_layout = vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let layouts = [ubo_layout, sampler_layout];
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layouts);
         let descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&create_info, None)? };
