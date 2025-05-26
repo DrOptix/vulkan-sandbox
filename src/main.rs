@@ -132,7 +132,6 @@ struct HelloTriangleApplication {
     in_flight_fences: Vec<vk::Fence>,
     current_frame: usize,
     framebuffer_resized: bool,
-    _vertices: Vec<Vertex>,
     indices: Vec<u32>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
@@ -171,21 +170,25 @@ impl HelloTriangleApplication {
         let entry = unsafe { ash::Entry::load() }?;
         let instance = Self::create_instance(&entry, &extensions, &validation_layers)?;
         let khr_surface_instance = khr::surface::Instance::new(&entry, &instance);
+
         let maybe_debug_messanger = Self::setup_debug_messenger(&entry, &instance)?;
         let debug_utils_instance = maybe_debug_messanger.as_ref().map(|debug| debug.0.clone());
         let debug_utils_messanger = maybe_debug_messanger.as_ref().map(|debug| debug.1);
+
         let window_surface = Self::create_window_surface(&instance, &window)?;
 
         Self::log_physical_devices(&instance)?;
 
         let physical_device =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
+
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
             &instance,
             &khr_surface_instance,
             physical_device,
             window_surface,
         )?;
+
         let khr_swapchain_device = khr::swapchain::Device::new(&instance, &device);
         let (
             swapchain,
@@ -203,19 +206,53 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
 
-        let render_pass = Self::create_render_pass(&device, swapchain_format)?;
+        let render_pass =
+            Self::create_render_pass(&instance, physical_device, &device, swapchain_format)?;
+
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
+
         let (pipeline_layout, pipeline) =
             Self::create_graphics_pipeline(&device, render_pass, descriptor_set_layout)?;
+
+        let command_pool = Self::create_command_pool(
+            &instance,
+            &khr_surface_instance,
+            physical_device,
+            &device,
+            window_surface,
+        )?;
+
+        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            swapchain_extent,
+        )?;
+
         let swapchain_framebuffers = Self::create_framebuffers(
             &device,
             render_pass,
             &swapchain_image_views,
+            depth_image_view,
             swapchain_extent,
         )?;
 
-        let mut vertices = Vec::with_capacity(8);
-        vertices.extend_from_slice(&[
+        let (texture_image, texture_image_memory) = Self::create_texture_image(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            Path::new("./textures/texture.png"),
+        )?;
+
+        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
+
+        let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
+
+        let vertices = [
             // First quad
             Vertex {
                 pos: glm::vec3(-0.5, -0.5, 0.0),
@@ -258,39 +295,8 @@ impl HelloTriangleApplication {
                 color: glm::vec3(1.0, 1.0, 1.0),
                 tex_coord: glm::vec2(1.0, 1.0),
             },
-        ]);
+        ];
 
-        let mut indices = Vec::with_capacity(6);
-        indices.extend_from_slice(&[0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4]);
-
-        let command_pool = Self::create_command_pool(
-            &instance,
-            &khr_surface_instance,
-            physical_device,
-            &device,
-            window_surface,
-        )?;
-        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
-        let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
-            Self::create_sync_objects(&device, swapchain_images.len())?;
-        let (texture_image, texture_image_memory) = Self::create_texture_image(
-            &instance,
-            physical_device,
-            &device,
-            command_pool,
-            graphics_queue,
-            Path::new("./textures/texture.png"),
-        )?;
-        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
-            &instance,
-            physical_device,
-            &device,
-            command_pool,
-            graphics_queue,
-            swapchain_extent,
-        )?;
-        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
-        let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
             physical_device,
@@ -299,6 +305,8 @@ impl HelloTriangleApplication {
             graphics_queue,
             &vertices,
         )?;
+
+        let indices = vec![0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
         let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
             &instance,
             physical_device,
@@ -307,9 +315,12 @@ impl HelloTriangleApplication {
             graphics_queue,
             &indices,
         )?;
+
         let (uniform_buffers, uniform_buffers_memory, uniform_buffers_mapped) =
             Self::create_uniform_buffers(&instance, physical_device, &device)?;
+
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
+
         let descriptor_sets = Self::create_descriptor_sets(
             &device,
             descriptor_set_layout,
@@ -318,6 +329,11 @@ impl HelloTriangleApplication {
             texture_image_view,
             texture_sampler,
         )?;
+
+        let command_buffers = Self::create_command_buffers(&device, command_pool)?;
+
+        let (image_available_semaphores, render_finished_semaphores, in_flight_fences) =
+            Self::create_sync_objects(&device, swapchain_images.len())?;
 
         Ok(Self {
             start_time: std::time::Instant::now(),
@@ -352,7 +368,6 @@ impl HelloTriangleApplication {
             in_flight_fences,
             current_frame: 0,
             framebuffer_resized: false,
-            _vertices: vertices,
             indices,
             vertex_buffer,
             vertex_buffer_memory,
@@ -1367,6 +1382,7 @@ impl HelloTriangleApplication {
             &self.device,
             self.render_pass,
             &self.swapchain_image_views,
+            self.depth_image_view,
             self.swapchain_extent,
         )?;
 
@@ -1444,8 +1460,9 @@ impl HelloTriangleApplication {
                 .context("Failed to being recording command buffer")?
         };
 
-        let mut clear_color = vk::ClearValue::default();
-        clear_color.color.float32 = [0.025, 0.025, 0.025, 1.0];
+        let mut clear_colors = [vk::ClearValue::default(); 2];
+        clear_colors[0].color.float32 = [0.025, 0.025, 0.025, 1.0];
+        clear_colors[1].depth_stencil = vk::ClearDepthStencilValue::default().depth(1.0).stencil(0);
 
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
@@ -1455,7 +1472,7 @@ impl HelloTriangleApplication {
                     .offset(vk::Offset2D::default())
                     .extent(self.swapchain_extent),
             )
-            .clear_values(slice::from_ref(&clear_color));
+            .clear_values(&clear_colors);
 
         unsafe {
             self.device.cmd_begin_render_pass(
@@ -2020,7 +2037,12 @@ impl HelloTriangleApplication {
         ))
     }
 
-    fn create_render_pass(device: &ash::Device, format: vk::Format) -> Result<vk::RenderPass> {
+    fn create_render_pass(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        format: vk::Format,
+    ) -> Result<vk::RenderPass> {
         let color_attachement = vk::AttachmentDescription::default()
             .format(format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -2031,24 +2053,49 @@ impl HelloTriangleApplication {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
+        let depth_attachement = vk::AttachmentDescription::default()
+            .format(Self::find_depth_format(instance, physical_device)?)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
         let color_attackment_ref = vk::AttachmentReference::default()
             .attachment(0)
             .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
+        let depth_attackment_ref = vk::AttachmentReference::default()
+            .attachment(1)
+            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
         let subpass = vk::SubpassDescription::default()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(slice::from_ref(&color_attackment_ref));
+            .color_attachments(slice::from_ref(&color_attackment_ref))
+            .depth_stencil_attachment(&depth_attackment_ref);
 
         let subpass_dependency = vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
             .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            );
 
+        let attachments = [color_attachement, depth_attachement];
         let render_pass_create_info = vk::RenderPassCreateInfo::default()
-            .attachments(slice::from_ref(&color_attachement))
+            .attachments(&attachments)
             .subpasses(slice::from_ref(&subpass))
             .dependencies(slice::from_ref(&subpass_dependency));
 
@@ -2170,6 +2217,15 @@ impl HelloTriangleApplication {
             }?
         };
 
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_bounds_test_enable(false)
+            .min_depth_bounds(0.0)
+            .max_depth_bounds(1.0)
+            .stencil_test_enable(false);
+
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_create_info)
@@ -2179,6 +2235,7 @@ impl HelloTriangleApplication {
             .multisample_state(&multisample_create_info)
             .color_blend_state(&color_blending_create_info)
             .dynamic_state(&dynamic_state_create_info)
+            .depth_stencil_state(&depth_stencil_state)
             .layout(pipeline_layout)
             .render_pass(render_pass)
             .subpass(0)
@@ -2230,14 +2287,16 @@ impl HelloTriangleApplication {
         device: &ash::Device,
         render_pass: vk::RenderPass,
         swapchain_image_views: &[vk::ImageView],
+        depth_image_view: vk::ImageView,
         swapchain_extent: vk::Extent2D,
     ) -> Result<Vec<vk::Framebuffer>> {
         let mut framebuffers = Vec::with_capacity(swapchain_image_views.len());
 
         for image_view in swapchain_image_views {
+            let attachments = [*image_view, depth_image_view];
             let framebuffer_create_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
-                .attachments(slice::from_ref(image_view))
+                .attachments(&attachments)
                 .width(swapchain_extent.width)
                 .height(swapchain_extent.height)
                 .layers(1);
