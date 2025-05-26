@@ -139,6 +139,7 @@ struct HelloTriangleApplication {
     texture_image: vk::Image,
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
+    texture_sampler: vk::Sampler,
 }
 
 /// Public functions
@@ -245,6 +246,7 @@ impl HelloTriangleApplication {
             Path::new("./textures/texture.png"),
         )?;
         let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
+        let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
             physical_device,
@@ -318,6 +320,7 @@ impl HelloTriangleApplication {
             texture_image,
             texture_image_memory,
             texture_image_view,
+            texture_sampler,
         })
     }
 
@@ -479,6 +482,38 @@ impl HelloTriangleApplication {
     fn create_texture_image_view(device: &ash::Device, image: vk::Image) -> Result<vk::ImageView> {
         let texture_image_view = Self::create_image_view(device, image, vk::Format::R8G8B8A8_SRGB)?;
         Ok(texture_image_view)
+    }
+
+    fn create_texture_sampler(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<vk::Sampler> {
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
+        let create_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(true)
+            .max_anisotropy(properties.limits.max_sampler_anisotropy)
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(0.0);
+
+        let sampler = unsafe {
+            device
+                .create_sampler(&create_info, None)
+                .context("Failed to crate texture sampler")?
+        };
+
+        Ok(sampler)
     }
 
     fn create_image_view(
@@ -1559,6 +1594,7 @@ impl HelloTriangleApplication {
         let queue_family_indices =
             Self::find_queue_families(instance, khr_surface_instance, physical_device, surface)?;
         let extensions_supported = Self::check_device_extension_support(instance, physical_device)?;
+        let supported_features = unsafe { instance.get_physical_device_features(physical_device) };
 
         let mut swap_chain_supported = false;
         if extensions_supported {
@@ -1568,7 +1604,10 @@ impl HelloTriangleApplication {
                 && !swap_chain_support.present_modes.is_empty();
         }
 
-        Ok(queue_family_indices.is_complete() && extensions_supported && swap_chain_supported)
+        Ok(queue_family_indices.is_complete()
+            && extensions_supported
+            && swap_chain_supported
+            && supported_features.sampler_anisotropy > 0)
     }
 
     fn query_swap_chain_support(
@@ -1651,7 +1690,7 @@ impl HelloTriangleApplication {
                         .queue_family_index(queue_family_indices.present_family.unwrap()),
                 ]
             };
-        let device_features = vk::PhysicalDeviceFeatures::default();
+        let device_features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
         let extensions = ["VK_KHR_swapchain".to_string()];
         let extensions: Vec<CString> = extensions
             .iter()
@@ -2059,7 +2098,9 @@ impl Drop for HelloTriangleApplication {
                 }
             }
             self.cleanup_swapchain();
-            self.device.destroy_image_view(self.texture_image_view, None);
+            self.device.destroy_sampler(self.texture_sampler, None);
+            self.device
+                .destroy_image_view(self.texture_image_view, None);
             self.device.destroy_image(self.texture_image, None);
             self.device.free_memory(self.texture_image_memory, None);
             self.uniform_buffers
