@@ -53,7 +53,7 @@ struct SwapChainSupportDetails {
 #[repr(C)]
 #[derive(Debug, Clone)]
 struct Vertex {
-    pos: glm::Vec2,
+    pos: glm::Vec3,
     color: glm::Vec3,
     tex_coord: glm::Vec2,
 }
@@ -72,7 +72,7 @@ impl Vertex {
         attribute_descriptions[0] = attribute_descriptions[0]
             .binding(0)
             .location(0)
-            .format(vk::Format::R32G32_SFLOAT)
+            .format(vk::Format::R32G32B32_SFLOAT)
             .offset(std::mem::offset_of!(Vertex, pos) as u32);
 
         attribute_descriptions[1] = attribute_descriptions[1]
@@ -211,32 +211,54 @@ impl HelloTriangleApplication {
             swapchain_extent,
         )?;
 
-        let mut vertices = Vec::with_capacity(4);
+        let mut vertices = Vec::with_capacity(8);
         vertices.extend_from_slice(&[
+            // First quad
             Vertex {
-                pos: glm::vec2(-0.5, -0.5),
+                pos: glm::vec3(-0.5, -0.5, 0.0),
                 color: glm::vec3(1.0, 0.0, 0.0),
                 tex_coord: glm::vec2(1.0, 0.0),
             },
             Vertex {
-                pos: glm::vec2(0.5, -0.5),
+                pos: glm::vec3(0.5, -0.5, 0.0),
                 color: glm::vec3(0.0, 1.0, 0.0),
                 tex_coord: glm::vec2(0.0, 0.0),
             },
             Vertex {
-                pos: glm::vec2(0.5, 0.5),
+                pos: glm::vec3(0.5, 0.5, 0.0),
                 color: glm::vec3(0.0, 0.0, 1.0),
                 tex_coord: glm::vec2(0.0, 1.0),
             },
             Vertex {
-                pos: glm::vec2(-0.5, 0.5),
+                pos: glm::vec3(-0.5, 0.5, 0.0),
+                color: glm::vec3(1.0, 1.0, 1.0),
+                tex_coord: glm::vec2(1.0, 1.0),
+            },
+            // Second quad
+            Vertex {
+                pos: glm::vec3(-0.5, -0.5, -0.5),
+                color: glm::vec3(1.0, 0.0, 0.0),
+                tex_coord: glm::vec2(1.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec3(0.5, -0.5, -0.5),
+                color: glm::vec3(0.0, 1.0, 0.0),
+                tex_coord: glm::vec2(0.0, 0.0),
+            },
+            Vertex {
+                pos: glm::vec3(0.5, 0.5, -0.5),
+                color: glm::vec3(0.0, 0.0, 1.0),
+                tex_coord: glm::vec2(0.0, 1.0),
+            },
+            Vertex {
+                pos: glm::vec3(-0.5, 0.5, -0.5),
                 color: glm::vec3(1.0, 1.0, 1.0),
                 tex_coord: glm::vec2(1.0, 1.0),
             },
         ]);
 
         let mut indices = Vec::with_capacity(6);
-        indices.extend_from_slice(&[0, 1, 2, 2, 3, 0]);
+        indices.extend_from_slice(&[0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4]);
 
         let command_pool = Self::create_command_pool(
             &instance,
