@@ -147,6 +147,9 @@ struct HelloTriangleApplication {
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
     texture_sampler: vk::Sampler,
+    depth_image: vk::Image,
+    depth_image_memory: vk::DeviceMemory,
+    depth_image_view: vk::ImageView,
 }
 
 /// Public functions
@@ -278,6 +281,14 @@ impl HelloTriangleApplication {
             graphics_queue,
             Path::new("./textures/texture.png"),
         )?;
+        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            swapchain_extent,
+        )?;
         let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
         let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
@@ -356,6 +367,9 @@ impl HelloTriangleApplication {
             texture_image_memory,
             texture_image_view,
             texture_sampler,
+            depth_image,
+            depth_image_view,
+            depth_image_memory,
         })
     }
 
@@ -514,8 +528,92 @@ impl HelloTriangleApplication {
         Ok((image, image_memory))
     }
 
+    fn create_depth_resource(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        swapchain_extent: vk::Extent2D,
+    ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
+        let depth_format = Self::find_depth_format(instance, physical_device)?;
+
+        let (depth_image, depth_image_memory) = Self::create_image(
+            instance,
+            physical_device,
+            device,
+            swapchain_extent.width,
+            swapchain_extent.height,
+            depth_format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        let depth_image_view = Self::create_image_view(
+            device,
+            depth_image,
+            depth_format,
+            vk::ImageAspectFlags::DEPTH,
+        )?;
+
+        Ok((depth_image, depth_image_memory, depth_image_view))
+    }
+
+    fn find_depth_format(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<vk::Format> {
+        let supported_format = Self::find_supported_format(
+            instance,
+            physical_device,
+            &[
+                vk::Format::D32_SFLOAT,
+                vk::Format::D32_SFLOAT_S8_UINT,
+                vk::Format::D24_UNORM_S8_UINT,
+            ],
+            vk::ImageTiling::OPTIMAL,
+            vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+        )?;
+
+        Ok(supported_format)
+    }
+
+    fn has_stencil_component(format: vk::Format) -> bool {
+        format == vk::Format::D32_SFLOAT_S8_UINT || format == vk::Format::D24_UNORM_S8_UINT
+    }
+
+    fn find_supported_format(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        candidates: &[vk::Format],
+        tiling: vk::ImageTiling,
+        features: vk::FormatFeatureFlags,
+    ) -> Result<vk::Format> {
+        for candidate in candidates {
+            let candidate_props = unsafe {
+                instance.get_physical_device_format_properties(physical_device, *candidate)
+            };
+
+            let linear_supported = tiling == vk::ImageTiling::LINEAR
+                && candidate_props.linear_tiling_features.intersects(features);
+            let optimal_supported = tiling == vk::ImageTiling::OPTIMAL
+                && candidate_props.optimal_tiling_features.intersects(features);
+
+            if linear_supported || optimal_supported {
+                return Ok(*candidate);
+            }
+        }
+
+        anyhow::bail!("Failed to find supported format");
+    }
+
     fn create_texture_image_view(device: &ash::Device, image: vk::Image) -> Result<vk::ImageView> {
-        let texture_image_view = Self::create_image_view(device, image, vk::Format::R8G8B8A8_SRGB)?;
+        let texture_image_view = Self::create_image_view(
+            device,
+            image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageAspectFlags::COLOR,
+        )?;
         Ok(texture_image_view)
     }
 
@@ -555,6 +653,7 @@ impl HelloTriangleApplication {
         device: &ash::Device,
         image: vk::Image,
         format: vk::Format,
+        aspect: vk::ImageAspectFlags,
     ) -> Result<vk::ImageView> {
         let create_info = vk::ImageViewCreateInfo::default()
             .image(image)
@@ -562,7 +661,7 @@ impl HelloTriangleApplication {
             .format(format)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .aspect_mask(aspect)
                     .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
@@ -979,10 +1078,20 @@ impl HelloTriangleApplication {
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         image: vk::Image,
-        _format: vk::Format,
+        format: vk::Format,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
     ) -> Result<()> {
+        let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
+            if Self::has_stencil_component(format) {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            } else {
+                vk::ImageAspectFlags::DEPTH
+            }
+        } else {
+            vk::ImageAspectFlags::COLOR
+        };
+
         let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
         let mut memory_barier = vk::ImageMemoryBarrier::default()
             .old_layout(old_layout)
@@ -992,7 +1101,7 @@ impl HelloTriangleApplication {
             .image(image)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .aspect_mask(aspect_mask)
                     .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
@@ -1872,7 +1981,12 @@ impl HelloTriangleApplication {
         let swapchain_images = unsafe { khr_swapchain_device.get_swapchain_images(swapchain)? };
         let mut swapchain_image_views = Vec::with_capacity(swapchain_images.len());
         for image in swapchain_images.iter() {
-            let image_view = Self::create_image_view(device, *image, surface_format.format)?;
+            let image_view = Self::create_image_view(
+                device,
+                *image,
+                surface_format.format,
+                vk::ImageAspectFlags::COLOR,
+            )?;
             swapchain_image_views.push(image_view);
         }
 
@@ -2161,6 +2275,9 @@ impl Drop for HelloTriangleApplication {
             }
             self.cleanup_swapchain();
             self.device.destroy_sampler(self.texture_sampler, None);
+            self.device.destroy_image_view(self.depth_image_view, None);
+            self.device.destroy_image(self.depth_image, None);
+            self.device.free_memory(self.depth_image_memory, None);
             self.device
                 .destroy_image_view(self.texture_image_view, None);
             self.device.destroy_image(self.texture_image, None);
