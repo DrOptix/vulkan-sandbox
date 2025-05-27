@@ -1,6 +1,7 @@
 use std::{
     alloc::{Layout, alloc},
     borrow::Cow,
+    collections::HashMap,
     ffi::{CStr, CString, c_char},
     path::Path,
     ptr, slice,
@@ -9,6 +10,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
+use image::EncodableLayout;
 use num_traits::One;
 
 fn main() {
@@ -51,11 +53,32 @@ struct SwapChainSupportDetails {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 struct Vertex {
     pos: glm::Vec3,
     color: glm::Vec3,
     tex_coord: glm::Vec2,
+}
+
+impl PartialEq for Vertex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos && self.color == other.color && self.tex_coord == other.tex_coord
+    }
+}
+
+impl Eq for Vertex {}
+
+impl std::hash::Hash for Vertex {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pos[0].to_bits().hash(state);
+        self.pos[1].to_bits().hash(state);
+        self.pos[2].to_bits().hash(state);
+        self.color[0].to_bits().hash(state);
+        self.color[1].to_bits().hash(state);
+        self.color[2].to_bits().hash(state);
+        self.tex_coord[0].to_bits().hash(state);
+        self.tex_coord[1].to_bits().hash(state);
+    }
 }
 
 impl Vertex {
@@ -245,57 +268,14 @@ impl HelloTriangleApplication {
             &device,
             command_pool,
             graphics_queue,
-            Path::new("./textures/texture.png"),
+            Path::new("./textures/viking_room.png"),
         )?;
 
         let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
 
         let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
 
-        let vertices = [
-            // First quad
-            Vertex {
-                pos: glm::vec3(-0.5, -0.5, 0.0),
-                color: glm::vec3(1.0, 0.0, 0.0),
-                tex_coord: glm::vec2(1.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, -0.5, 0.0),
-                color: glm::vec3(0.0, 1.0, 0.0),
-                tex_coord: glm::vec2(0.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, 0.5, 0.0),
-                color: glm::vec3(0.0, 0.0, 1.0),
-                tex_coord: glm::vec2(0.0, 1.0),
-            },
-            Vertex {
-                pos: glm::vec3(-0.5, 0.5, 0.0),
-                color: glm::vec3(1.0, 1.0, 1.0),
-                tex_coord: glm::vec2(1.0, 1.0),
-            },
-            // Second quad
-            Vertex {
-                pos: glm::vec3(-0.5, -0.5, -0.5),
-                color: glm::vec3(1.0, 0.0, 0.0),
-                tex_coord: glm::vec2(1.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, -0.5, -0.5),
-                color: glm::vec3(0.0, 1.0, 0.0),
-                tex_coord: glm::vec2(0.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, 0.5, -0.5),
-                color: glm::vec3(0.0, 0.0, 1.0),
-                tex_coord: glm::vec2(0.0, 1.0),
-            },
-            Vertex {
-                pos: glm::vec3(-0.5, 0.5, -0.5),
-                color: glm::vec3(1.0, 1.0, 1.0),
-                tex_coord: glm::vec2(1.0, 1.0),
-            },
-        ];
+        let (vertices, indices) = Self::load_model(Path::new("./models/viking_room.obj"))?;
 
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
@@ -306,7 +286,6 @@ impl HelloTriangleApplication {
             &vertices,
         )?;
 
-        let indices = vec![0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
         let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
             &instance,
             physical_device,
@@ -466,6 +445,7 @@ impl HelloTriangleApplication {
         path: &Path,
     ) -> Result<(vk::Image, vk::DeviceMemory)> {
         let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
+        let image = image.to_rgba8();
         let width = image.width();
         let height = image.height();
         let image_size = (4 * width * height) as vk::DeviceSize;
@@ -486,7 +466,7 @@ impl HelloTriangleApplication {
                 vk::MemoryMapFlags::empty(),
             )?;
             std::ptr::copy_nonoverlapping(
-                image.as_bytes().as_ptr(),
+                image.as_raw().as_bytes().as_ptr(),
                 data_ptr as _,
                 image.as_bytes().len(),
             );
@@ -753,6 +733,49 @@ impl HelloTriangleApplication {
         }
 
         Ok((image, image_memory))
+    }
+
+    fn load_model(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let mut vertex_data = Vec::new();
+        let mut index_data = Vec::new();
+        let mut unique_vertices = HashMap::new();
+
+        let (models, _materials) =
+            tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS).context("Failed to OBJ load file")?;
+
+        models.into_iter().for_each(|model| {
+            model.mesh.indices.into_iter().for_each(|idx| {
+                let pos_offset = (3 * idx) as usize;
+                let tex_coord_offset = (2 * idx) as usize;
+
+                let vertex = Vertex {
+                    pos: glm::vec3(
+                        model.mesh.positions[pos_offset],
+                        model.mesh.positions[pos_offset + 1],
+                        model.mesh.positions[pos_offset + 2],
+                    ),
+                    color: glm::vec3(1.0, 1.0, 1.0),
+                    tex_coord: glm::vec2(
+                        model.mesh.texcoords[tex_coord_offset],
+                        1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+                    ),
+                };
+
+                if let Some(index) = unique_vertices.get(&vertex) {
+                    index_data.push(*index as u32);
+                } else {
+                    let index = vertex_data.len();
+                    unique_vertices.insert(vertex, index);
+                    vertex_data.push(vertex);
+                    index_data.push(index as u32);
+                }
+            });
+        });
+
+        dbg!(vertex_data.len());
+        dbg!(index_data.len());
+
+        Ok((vertex_data, index_data))
     }
 
     fn create_vertex_buffer(
@@ -1308,7 +1331,7 @@ impl HelloTriangleApplication {
 
         let model = glm::ext::rotate(
             &glm::Mat4::one(),
-            duration * glm::radians(90.0),
+            duration * glm::radians(45.0),
             glm::vec3(0.0, 0.0, 1.0),
         );
         let view = glm::ext::look_at(
@@ -2179,7 +2202,7 @@ impl HelloTriangleApplication {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 
