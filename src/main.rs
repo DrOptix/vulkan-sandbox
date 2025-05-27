@@ -274,7 +274,8 @@ impl HelloTriangleApplication {
         let texture_image_view =
             Self::create_texture_image_view(&device, texture_image, mip_levels)?;
 
-        let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
+        let texture_sampler =
+            Self::create_texture_sampler(&instance, &device, physical_device, mip_levels)?;
 
         let (vertices, indices) = Self::load_model(Path::new("./models/viking_room.obj"))?;
 
@@ -790,6 +791,7 @@ impl HelloTriangleApplication {
         instance: &ash::Instance,
         device: &ash::Device,
         physical_device: vk::PhysicalDevice,
+        mip_levels: u32,
     ) -> Result<vk::Sampler> {
         let properties = unsafe { instance.get_physical_device_properties(physical_device) };
         let create_info = vk::SamplerCreateInfo::default()
@@ -807,7 +809,7 @@ impl HelloTriangleApplication {
             .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(0.0);
+            .max_lod(mip_levels as f32);
 
         let sampler = unsafe {
             device
