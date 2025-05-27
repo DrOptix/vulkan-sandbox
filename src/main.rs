@@ -262,7 +262,7 @@ impl HelloTriangleApplication {
             swapchain_extent,
         )?;
 
-        let (texture_image, texture_image_memory) = Self::create_texture_image(
+        let (texture_image, texture_image_memory, mip_levels) = Self::create_texture_image(
             &instance,
             physical_device,
             &device,
@@ -271,7 +271,8 @@ impl HelloTriangleApplication {
             Path::new("./textures/viking_room.png"),
         )?;
 
-        let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
+        let texture_image_view =
+            Self::create_texture_image_view(&device, texture_image, mip_levels)?;
 
         let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
 
@@ -443,7 +444,7 @@ impl HelloTriangleApplication {
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         path: &Path,
-    ) -> Result<(vk::Image, vk::DeviceMemory)> {
+    ) -> Result<(vk::Image, vk::DeviceMemory, u32)> {
         let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
         let image = image.to_rgba8();
         let width = image.width();
@@ -457,6 +458,8 @@ impl HelloTriangleApplication {
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
+
+        let mip_levels = glm::floor(glm::log2(glm::max(width, height) as f32)) as u32;
 
         unsafe {
             let data_ptr = device.map_memory(
@@ -479,9 +482,12 @@ impl HelloTriangleApplication {
             device,
             width,
             height,
+            mip_levels,
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::SAMPLED,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
@@ -493,6 +499,7 @@ impl HelloTriangleApplication {
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
         )?;
 
         Self::copy_buffer_to_image(
@@ -505,22 +512,154 @@ impl HelloTriangleApplication {
             height,
         )?;
 
-        Self::transition_image_layout(
-            device,
-            command_pool,
-            queue,
-            image,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        )?;
-
         unsafe {
             device.destroy_buffer(staging_buffer, None);
             device.free_memory(staging_buffer_memory, None);
         }
 
-        Ok((image, image_memory))
+        Self::generate_mipmaps(
+            device,
+            command_pool,
+            queue,
+            image,
+            width,
+            height,
+            mip_levels,
+        )?;
+
+        Ok((image, image_memory, mip_levels))
+    }
+
+    fn generate_mipmaps(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        image: vk::Image,
+        width: u32,
+        height: u32,
+        mip_levels: u32,
+    ) -> Result<()> {
+        let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
+
+        let mut memory_barier = vk::ImageMemoryBarrier::default()
+            .image(image)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .level_count(1),
+            );
+
+        let mut mip_width = width;
+        let mut mip_height = height;
+
+        for i in 1..mip_levels {
+            memory_barier.subresource_range.base_mip_level = i - 1;
+            memory_barier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+            memory_barier.new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            memory_barier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            memory_barier.dst_access_mask = vk::AccessFlags::TRANSFER_READ;
+
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[memory_barier],
+                );
+            }
+
+            let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
+            let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
+
+            let blit = vk::ImageBlit::default()
+                .src_offsets([
+                    vk::Offset3D::default().x(0).y(0).z(0),
+                    vk::Offset3D::default()
+                        .x(mip_width as i32)
+                        .y(mip_height as i32)
+                        .z(1),
+                ])
+                .src_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(i - 1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
+                .dst_offsets([
+                    vk::Offset3D::default().x(0).y(0).z(0),
+                    vk::Offset3D::default()
+                        .x(new_mip_width as i32)
+                        .y(new_mip_height as i32)
+                        .z(1),
+                ])
+                .dst_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(i)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
+
+            unsafe {
+                device.cmd_blit_image(
+                    command_buffer,
+                    image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[blit],
+                    vk::Filter::LINEAR,
+                )
+            };
+
+            memory_barier.old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            memory_barier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            memory_barier.src_access_mask = vk::AccessFlags::TRANSFER_READ;
+            memory_barier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[memory_barier],
+                );
+            }
+
+            mip_width = new_mip_width;
+            mip_height = new_mip_height;
+        }
+
+        memory_barier.subresource_range.base_mip_level = mip_levels - 1;
+        memory_barier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+        memory_barier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        memory_barier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+        memory_barier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[memory_barier],
+            );
+        }
+
+        Self::end_single_time_commands(device, command_pool, queue, command_buffer)
     }
 
     fn create_depth_resource(
@@ -539,6 +678,7 @@ impl HelloTriangleApplication {
             device,
             swapchain_extent.width,
             swapchain_extent.height,
+            1,
             depth_format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -549,6 +689,7 @@ impl HelloTriangleApplication {
             depth_image,
             depth_format,
             vk::ImageAspectFlags::DEPTH,
+            1,
         )?;
 
         Self::transition_image_layout(
@@ -559,6 +700,7 @@ impl HelloTriangleApplication {
             depth_format,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            1,
         )?;
 
         Ok((depth_image, depth_image_memory, depth_image_view))
@@ -612,12 +754,17 @@ impl HelloTriangleApplication {
         anyhow::bail!("Failed to find supported format");
     }
 
-    fn create_texture_image_view(device: &ash::Device, image: vk::Image) -> Result<vk::ImageView> {
+    fn create_texture_image_view(
+        device: &ash::Device,
+        image: vk::Image,
+        mip_levels: u32,
+    ) -> Result<vk::ImageView> {
         let texture_image_view = Self::create_image_view(
             device,
             image,
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageAspectFlags::COLOR,
+            mip_levels,
         )?;
         Ok(texture_image_view)
     }
@@ -659,6 +806,7 @@ impl HelloTriangleApplication {
         image: vk::Image,
         format: vk::Format,
         aspect: vk::ImageAspectFlags,
+        mip_levels: u32,
     ) -> Result<vk::ImageView> {
         let create_info = vk::ImageViewCreateInfo::default()
             .image(image)
@@ -668,7 +816,7 @@ impl HelloTriangleApplication {
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(aspect)
                     .base_mip_level(0)
-                    .level_count(1)
+                    .level_count(mip_levels)
                     .base_array_layer(0)
                     .layer_count(1),
             );
@@ -689,6 +837,7 @@ impl HelloTriangleApplication {
         device: &ash::Device,
         width: u32,
         height: u32,
+        mip_levels: u32,
         format: vk::Format,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
@@ -697,7 +846,7 @@ impl HelloTriangleApplication {
         let create_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D::default().width(width).height(height).depth(1))
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .format(format)
             .tiling(tiling)
@@ -1121,6 +1270,7 @@ impl HelloTriangleApplication {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn transition_image_layout(
         device: &ash::Device,
         command_pool: vk::CommandPool,
@@ -1129,6 +1279,7 @@ impl HelloTriangleApplication {
         format: vk::Format,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
+        mip_levels: u32,
     ) -> Result<()> {
         let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
             if Self::has_stencil_component(format) {
@@ -1151,7 +1302,7 @@ impl HelloTriangleApplication {
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(aspect_mask)
                     .base_mip_level(0)
-                    .level_count(1)
+                    .level_count(mip_levels)
                     .base_array_layer(0)
                     .layer_count(1),
             )
@@ -2047,6 +2198,7 @@ impl HelloTriangleApplication {
                 *image,
                 surface_format.format,
                 vk::ImageAspectFlags::COLOR,
+                1,
             )?;
             swapchain_image_views.push(image_view);
         }
