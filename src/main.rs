@@ -1,6 +1,7 @@
 use std::{
     alloc::{Layout, alloc},
     borrow::Cow,
+    collections::HashMap,
     ffi::{CStr, CString, c_char},
     path::Path,
     ptr, slice,
@@ -52,11 +53,32 @@ struct SwapChainSupportDetails {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 struct Vertex {
     pos: glm::Vec3,
     color: glm::Vec3,
     tex_coord: glm::Vec2,
+}
+
+impl PartialEq for Vertex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos && self.color == other.color && self.tex_coord == other.tex_coord
+    }
+}
+
+impl Eq for Vertex {}
+
+impl std::hash::Hash for Vertex {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pos[0].to_bits().hash(state);
+        self.pos[1].to_bits().hash(state);
+        self.pos[2].to_bits().hash(state);
+        self.color[0].to_bits().hash(state);
+        self.color[1].to_bits().hash(state);
+        self.color[2].to_bits().hash(state);
+        self.tex_coord[0].to_bits().hash(state);
+        self.tex_coord[1].to_bits().hash(state);
+    }
 }
 
 impl Vertex {
@@ -716,66 +738,42 @@ impl HelloTriangleApplication {
     fn load_model(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut vertex_data = Vec::new();
         let mut index_data = Vec::new();
+        let mut unique_vertices = HashMap::new();
 
         let (models, _materials) =
             tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS).context("Failed to OBJ load file")?;
 
-        // for model in models.into_iter() {
-        // let positions: Vec<glm::Vec3> = model
-        //     .mesh
-        //     .positions
-        //     .chunks_exact(3)
-        //     .map(|chunk| glm::vec3(chunk[0], chunk[1], chunk[2]))
-        //     .collect();
-        //
-        // let tex_coord: Vec<glm::Vec2> = model
-        //     .mesh
-        //     .texcoords
-        //     .chunks_exact(2)
-        //     .map(|chunk| glm::vec2(chunk[0], 1.0 - chunk[1]))
-        //     .collect();
-        //
-        // vertex_data.extend(
-        //     positions
-        //         .iter()
-        //         .zip(tex_coord)
-        //         .map(|(pos, tex_coord)| Vertex {
-        //             pos: *pos,
-        //             color: glm::vec3(
-        //                 rand.random_range(0.0..=1.0),
-        //                 rand.random_range(0.0..=1.0),
-        //                 rand.random_range(0.0..=1.0),
-        //             ),
-        //             tex_coord,
-        //         }),
-        // );
-        // }
-
         models.into_iter().for_each(|model| {
             model.mesh.indices.into_iter().for_each(|idx| {
-                let i = idx as usize;
-
-                let pos = glm::vec3(
-                    model.mesh.positions[3 * i],
-                    model.mesh.positions[3 * i + 1],
-                    model.mesh.positions[3 * i + 2],
-                );
-
-                let tex_coord = glm::vec2(
-                    model.mesh.texcoords[2 * i],
-                    1.0 - model.mesh.texcoords[2 * i + 1],
-                );
+                let pos_offset = (3 * idx) as usize;
+                let tex_coord_offset = (2 * idx) as usize;
 
                 let vertex = Vertex {
-                    pos,
+                    pos: glm::vec3(
+                        model.mesh.positions[pos_offset],
+                        model.mesh.positions[pos_offset + 1],
+                        model.mesh.positions[pos_offset + 2],
+                    ),
                     color: glm::vec3(1.0, 1.0, 1.0),
-                    tex_coord,
+                    tex_coord: glm::vec2(
+                        model.mesh.texcoords[tex_coord_offset],
+                        1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+                    ),
                 };
 
-                vertex_data.push(vertex);
-                index_data.push(idx);
+                if let Some(index) = unique_vertices.get(&vertex) {
+                    index_data.push(*index as u32);
+                } else {
+                    let index = vertex_data.len();
+                    unique_vertices.insert(vertex, index);
+                    vertex_data.push(vertex);
+                    index_data.push(index as u32);
+                }
             });
         });
+
+        dbg!(vertex_data.len());
+        dbg!(index_data.len());
 
         Ok((vertex_data, index_data))
     }
