@@ -1331,7 +1331,7 @@ impl HelloTriangleApplication {
 
         let model = glm::ext::rotate(
             &glm::Mat4::one(),
-            duration * glm::radians(90.0),
+            duration * glm::radians(45.0),
             glm::vec3(0.0, 0.0, 1.0),
         );
         let view = glm::ext::look_at(
