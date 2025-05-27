@@ -518,10 +518,13 @@ impl HelloTriangleApplication {
         }
 
         Self::generate_mipmaps(
+            instance,
+            physical_device,
             device,
             command_pool,
             queue,
             image,
+            vk::Format::R8G8B8A8_SRGB,
             width,
             height,
             mip_levels,
@@ -530,15 +533,29 @@ impl HelloTriangleApplication {
         Ok((image, image_memory, mip_levels))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_mipmaps(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
         device: &ash::Device,
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         image: vk::Image,
+        format: vk::Format,
         width: u32,
         height: u32,
         mip_levels: u32,
     ) -> Result<()> {
+        let format_properties =
+            unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+
+        if !format_properties
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)
+        {
+            anyhow::bail!("Texture image format does not support linear blitting");
+        }
+
         let command_buffer = Self::begin_single_time_commands(device, command_pool)?;
 
         let mut memory_barier = vk::ImageMemoryBarrier::default()
