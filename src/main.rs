@@ -1546,11 +1546,24 @@ impl HelloTriangleApplication {
             self.window_surface,
         )?;
 
+        let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
+            &self.instance,
+            self.physical_device,
+            &self.device,
+            self.command_pool,
+            self.graphics_queue,
+            swapchain_extent,
+        )?;
+
         self.swapchain = swapchain;
         self.swapchain_images = swapchain_images;
         self.swapchain_image_views = swapchain_image_views;
         self.swapchain_format = swapchain_format;
         self.swapchain_extent = swapchain_extent;
+
+        self.depth_image = depth_image;
+        self.depth_image_memory = depth_image_memory;
+        self.depth_image_view = depth_image_view;
 
         self.swapchain_framebuffers = Self::create_framebuffers(
             &self.device,
@@ -1565,6 +1578,9 @@ impl HelloTriangleApplication {
 
     fn cleanup_swapchain(&self) {
         unsafe {
+            self.device.destroy_image_view(self.depth_image_view, None);
+            self.device.destroy_image(self.depth_image, None);
+            self.device.free_memory(self.depth_image_memory, None);
             self.swapchain_framebuffers
                 .iter()
                 .for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
@@ -2530,9 +2546,6 @@ impl Drop for HelloTriangleApplication {
             }
             self.cleanup_swapchain();
             self.device.destroy_sampler(self.texture_sampler, None);
-            self.device.destroy_image_view(self.depth_image_view, None);
-            self.device.destroy_image(self.depth_image, None);
-            self.device.free_memory(self.depth_image_memory, None);
             self.device
                 .destroy_image_view(self.texture_image_view, None);
             self.device.destroy_image(self.texture_image, None);
