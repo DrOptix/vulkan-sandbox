@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
+use image::EncodableLayout;
 use num_traits::One;
 
 fn main() {
@@ -245,57 +246,14 @@ impl HelloTriangleApplication {
             &device,
             command_pool,
             graphics_queue,
-            Path::new("./textures/texture.png"),
+            Path::new("./textures/viking_room.png"),
         )?;
 
         let texture_image_view = Self::create_texture_image_view(&device, texture_image)?;
 
         let texture_sampler = Self::create_texture_sampler(&instance, &device, physical_device)?;
 
-        let vertices = [
-            // First quad
-            Vertex {
-                pos: glm::vec3(-0.5, -0.5, 0.0),
-                color: glm::vec3(1.0, 0.0, 0.0),
-                tex_coord: glm::vec2(1.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, -0.5, 0.0),
-                color: glm::vec3(0.0, 1.0, 0.0),
-                tex_coord: glm::vec2(0.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, 0.5, 0.0),
-                color: glm::vec3(0.0, 0.0, 1.0),
-                tex_coord: glm::vec2(0.0, 1.0),
-            },
-            Vertex {
-                pos: glm::vec3(-0.5, 0.5, 0.0),
-                color: glm::vec3(1.0, 1.0, 1.0),
-                tex_coord: glm::vec2(1.0, 1.0),
-            },
-            // Second quad
-            Vertex {
-                pos: glm::vec3(-0.5, -0.5, -0.5),
-                color: glm::vec3(1.0, 0.0, 0.0),
-                tex_coord: glm::vec2(1.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, -0.5, -0.5),
-                color: glm::vec3(0.0, 1.0, 0.0),
-                tex_coord: glm::vec2(0.0, 0.0),
-            },
-            Vertex {
-                pos: glm::vec3(0.5, 0.5, -0.5),
-                color: glm::vec3(0.0, 0.0, 1.0),
-                tex_coord: glm::vec2(0.0, 1.0),
-            },
-            Vertex {
-                pos: glm::vec3(-0.5, 0.5, -0.5),
-                color: glm::vec3(1.0, 1.0, 1.0),
-                tex_coord: glm::vec2(1.0, 1.0),
-            },
-        ];
+        let (vertices, indices) = Self::load_model(Path::new("./models/viking_room.obj"))?;
 
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
@@ -306,7 +264,6 @@ impl HelloTriangleApplication {
             &vertices,
         )?;
 
-        let indices = vec![0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
         let (index_buffer, index_buffer_memory) = Self::create_index_buffer(
             &instance,
             physical_device,
@@ -466,6 +423,7 @@ impl HelloTriangleApplication {
         path: &Path,
     ) -> Result<(vk::Image, vk::DeviceMemory)> {
         let image = image::open(path).context(format!("Failed to load texture: {path:?}"))?;
+        let image = image.to_rgba8();
         let width = image.width();
         let height = image.height();
         let image_size = (4 * width * height) as vk::DeviceSize;
@@ -486,7 +444,7 @@ impl HelloTriangleApplication {
                 vk::MemoryMapFlags::empty(),
             )?;
             std::ptr::copy_nonoverlapping(
-                image.as_bytes().as_ptr(),
+                image.as_raw().as_bytes().as_ptr(),
                 data_ptr as _,
                 image.as_bytes().len(),
             );
@@ -753,6 +711,73 @@ impl HelloTriangleApplication {
         }
 
         Ok((image, image_memory))
+    }
+
+    fn load_model(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let mut vertex_data = Vec::new();
+        let mut index_data = Vec::new();
+
+        let (models, _materials) =
+            tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS).context("Failed to OBJ load file")?;
+
+        // for model in models.into_iter() {
+        // let positions: Vec<glm::Vec3> = model
+        //     .mesh
+        //     .positions
+        //     .chunks_exact(3)
+        //     .map(|chunk| glm::vec3(chunk[0], chunk[1], chunk[2]))
+        //     .collect();
+        //
+        // let tex_coord: Vec<glm::Vec2> = model
+        //     .mesh
+        //     .texcoords
+        //     .chunks_exact(2)
+        //     .map(|chunk| glm::vec2(chunk[0], 1.0 - chunk[1]))
+        //     .collect();
+        //
+        // vertex_data.extend(
+        //     positions
+        //         .iter()
+        //         .zip(tex_coord)
+        //         .map(|(pos, tex_coord)| Vertex {
+        //             pos: *pos,
+        //             color: glm::vec3(
+        //                 rand.random_range(0.0..=1.0),
+        //                 rand.random_range(0.0..=1.0),
+        //                 rand.random_range(0.0..=1.0),
+        //             ),
+        //             tex_coord,
+        //         }),
+        // );
+        // }
+
+        models.into_iter().for_each(|model| {
+            model.mesh.indices.into_iter().for_each(|idx| {
+                let i = idx as usize;
+
+                let pos = glm::vec3(
+                    model.mesh.positions[3 * i],
+                    model.mesh.positions[3 * i + 1],
+                    model.mesh.positions[3 * i + 2],
+                );
+
+                let tex_coord = glm::vec2(
+                    model.mesh.texcoords[2 * i],
+                    1.0 - model.mesh.texcoords[2 * i + 1],
+                );
+
+                let vertex = Vertex {
+                    pos,
+                    color: glm::vec3(1.0, 1.0, 1.0),
+                    tex_coord,
+                };
+
+                vertex_data.push(vertex);
+                index_data.push(idx);
+            });
+        });
+
+        Ok((vertex_data, index_data))
     }
 
     fn create_vertex_buffer(
@@ -2179,7 +2204,7 @@ impl HelloTriangleApplication {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 

@@ -10,3 +10,4 @@ glfw = { version = "0.59.0", features = ["vulkan"] }
 glm = "0.2.3"
 image = "0.25.6"
 num-traits = "0.2.19"
+tobj = "4.0.3"
