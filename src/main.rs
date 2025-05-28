@@ -172,7 +172,10 @@ struct HelloTriangleApplication {
     depth_image: vk::Image,
     depth_image_memory: vk::DeviceMemory,
     depth_image_view: vk::ImageView,
-    _msaa_samples: vk::SampleCountFlags,
+    msaa_samples: vk::SampleCountFlags,
+    msaa_image: vk::Image,
+    msaa_image_memory: vk::DeviceMemory,
+    msaa_image_view: vk::ImageView,
 }
 
 /// Public functions
@@ -205,6 +208,8 @@ impl HelloTriangleApplication {
 
         let (physical_device, msaa_samples) =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
+
+        dbg!(msaa_samples);
 
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
             &instance,
@@ -244,6 +249,16 @@ impl HelloTriangleApplication {
             physical_device,
             &device,
             window_surface,
+        )?;
+
+        let (msaa_image, msaa_image_memory, msaa_image_view) = Self::create_msaa_resource(
+            &instance,
+            physical_device,
+            &device,
+            width,
+            height,
+            msaa_samples,
+            swapchain_format,
         )?;
 
         let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
@@ -367,7 +382,10 @@ impl HelloTriangleApplication {
             depth_image,
             depth_image_view,
             depth_image_memory,
-            _msaa_samples: msaa_samples,
+            msaa_samples,
+            msaa_image,
+            msaa_image_memory,
+            msaa_image_view,
         })
     }
 
@@ -486,6 +504,7 @@ impl HelloTriangleApplication {
             width,
             height,
             mip_levels,
+            vk::SampleCountFlags::TYPE_1,
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_SRC
@@ -682,6 +701,35 @@ impl HelloTriangleApplication {
         Self::end_single_time_commands(device, command_pool, queue, command_buffer)
     }
 
+    fn create_msaa_resource(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        width: u32,
+        height: u32,
+        msaa_samples: vk::SampleCountFlags,
+        format: vk::Format,
+    ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
+        let (image, image_memory) = Self::create_image(
+            instance,
+            physical_device,
+            device,
+            width,
+            height,
+            1,
+            msaa_samples,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        let image_view =
+            Self::create_image_view(device, image, format, vk::ImageAspectFlags::COLOR, 1)?;
+
+        Ok((image, image_memory, image_view))
+    }
+
     fn create_depth_resource(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
@@ -699,6 +747,7 @@ impl HelloTriangleApplication {
             swapchain_extent.width,
             swapchain_extent.height,
             1,
+            vk::SampleCountFlags::TYPE_1,
             depth_format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -859,6 +908,7 @@ impl HelloTriangleApplication {
         width: u32,
         height: u32,
         mip_levels: u32,
+        samples: vk::SampleCountFlags,
         format: vk::Format,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
@@ -873,7 +923,7 @@ impl HelloTriangleApplication {
             .tiling(tiling)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(usage)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(samples)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let image = unsafe {
@@ -1567,6 +1617,16 @@ impl HelloTriangleApplication {
             self.window_surface,
         )?;
 
+        let (msaa_image, msaa_image_memory, msaa_image_view) = Self::create_msaa_resource(
+            &self.instance,
+            self.physical_device,
+            &self.device,
+            self.swapchain_extent.width,
+            self.swapchain_extent.height,
+            self.msaa_samples,
+            swapchain_format,
+        )?;
+
         let (depth_image, depth_image_memory, depth_image_view) = Self::create_depth_resource(
             &self.instance,
             self.physical_device,
@@ -1581,6 +1641,10 @@ impl HelloTriangleApplication {
         self.swapchain_image_views = swapchain_image_views;
         self.swapchain_format = swapchain_format;
         self.swapchain_extent = swapchain_extent;
+
+        self.msaa_image = msaa_image;
+        self.msaa_image_memory = msaa_image_memory;
+        self.msaa_image_view = msaa_image_view;
 
         self.depth_image = depth_image;
         self.depth_image_memory = depth_image_memory;
@@ -1599,6 +1663,9 @@ impl HelloTriangleApplication {
 
     fn cleanup_swapchain(&self) {
         unsafe {
+            self.device.destroy_image_view(self.msaa_image_view, None);
+            self.device.destroy_image(self.msaa_image, None);
+            self.device.free_memory(self.msaa_image_memory, None);
             self.device.destroy_image_view(self.depth_image_view, None);
             self.device.destroy_image(self.depth_image, None);
             self.device.free_memory(self.depth_image_memory, None);
