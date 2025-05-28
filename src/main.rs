@@ -173,9 +173,9 @@ struct HelloTriangleApplication {
     depth_image_memory: vk::DeviceMemory,
     depth_image_view: vk::ImageView,
     msaa_samples: vk::SampleCountFlags,
-    msaa_image: vk::Image,
-    msaa_image_memory: vk::DeviceMemory,
-    msaa_image_view: vk::ImageView,
+    color_image: vk::Image,
+    color_image_memory: vk::DeviceMemory,
+    color_image_view: vk::ImageView,
 }
 
 /// Public functions
@@ -235,13 +235,22 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
 
-        let render_pass =
-            Self::create_render_pass(&instance, physical_device, &device, swapchain_format)?;
+        let render_pass = Self::create_render_pass(
+            &instance,
+            physical_device,
+            &device,
+            swapchain_format,
+            msaa_samples,
+        )?;
 
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
 
-        let (pipeline_layout, pipeline) =
-            Self::create_graphics_pipeline(&device, render_pass, descriptor_set_layout)?;
+        let (pipeline_layout, pipeline) = Self::create_graphics_pipeline(
+            &device,
+            render_pass,
+            descriptor_set_layout,
+            msaa_samples,
+        )?;
 
         let command_pool = Self::create_command_pool(
             &instance,
@@ -251,12 +260,12 @@ impl HelloTriangleApplication {
             window_surface,
         )?;
 
-        let (msaa_image, msaa_image_memory, msaa_image_view) = Self::create_msaa_resource(
+        let (color_image, color_image_memory, color_image_view) = Self::create_color_resource(
             &instance,
             physical_device,
             &device,
-            width,
-            height,
+            swapchain_extent.width,
+            swapchain_extent.height,
             msaa_samples,
             swapchain_format,
         )?;
@@ -268,12 +277,14 @@ impl HelloTriangleApplication {
             command_pool,
             graphics_queue,
             swapchain_extent,
+            msaa_samples,
         )?;
 
         let swapchain_framebuffers = Self::create_framebuffers(
             &device,
             render_pass,
             &swapchain_image_views,
+            color_image_view,
             depth_image_view,
             swapchain_extent,
         )?;
@@ -383,9 +394,9 @@ impl HelloTriangleApplication {
             depth_image_view,
             depth_image_memory,
             msaa_samples,
-            msaa_image,
-            msaa_image_memory,
-            msaa_image_view,
+            color_image,
+            color_image_memory,
+            color_image_view,
         })
     }
 
@@ -701,14 +712,14 @@ impl HelloTriangleApplication {
         Self::end_single_time_commands(device, command_pool, queue, command_buffer)
     }
 
-    fn create_msaa_resource(
+    fn create_color_resource(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
         device: &ash::Device,
         width: u32,
         height: u32,
         msaa_samples: vk::SampleCountFlags,
-        format: vk::Format,
+        msaa_format: vk::Format,
     ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
         let (image, image_memory) = Self::create_image(
             instance,
@@ -718,14 +729,14 @@ impl HelloTriangleApplication {
             height,
             1,
             msaa_samples,
-            format,
+            msaa_format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
         let image_view =
-            Self::create_image_view(device, image, format, vk::ImageAspectFlags::COLOR, 1)?;
+            Self::create_image_view(device, image, msaa_format, vk::ImageAspectFlags::COLOR, 1)?;
 
         Ok((image, image_memory, image_view))
     }
@@ -737,6 +748,7 @@ impl HelloTriangleApplication {
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         swapchain_extent: vk::Extent2D,
+        msaa_samples: vk::SampleCountFlags,
     ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
         let depth_format = Self::find_depth_format(instance, physical_device)?;
 
@@ -747,7 +759,7 @@ impl HelloTriangleApplication {
             swapchain_extent.width,
             swapchain_extent.height,
             1,
-            vk::SampleCountFlags::TYPE_1,
+            msaa_samples,
             depth_format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -991,9 +1003,6 @@ impl HelloTriangleApplication {
                 }
             });
         });
-
-        dbg!(vertex_data.len());
-        dbg!(index_data.len());
 
         Ok((vertex_data, index_data))
     }
@@ -1617,7 +1626,7 @@ impl HelloTriangleApplication {
             self.window_surface,
         )?;
 
-        let (msaa_image, msaa_image_memory, msaa_image_view) = Self::create_msaa_resource(
+        let (msaa_image, msaa_image_memory, msaa_image_view) = Self::create_color_resource(
             &self.instance,
             self.physical_device,
             &self.device,
@@ -1634,6 +1643,7 @@ impl HelloTriangleApplication {
             self.command_pool,
             self.graphics_queue,
             swapchain_extent,
+            self.msaa_samples,
         )?;
 
         self.swapchain = swapchain;
@@ -1642,9 +1652,9 @@ impl HelloTriangleApplication {
         self.swapchain_format = swapchain_format;
         self.swapchain_extent = swapchain_extent;
 
-        self.msaa_image = msaa_image;
-        self.msaa_image_memory = msaa_image_memory;
-        self.msaa_image_view = msaa_image_view;
+        self.color_image = msaa_image;
+        self.color_image_memory = msaa_image_memory;
+        self.color_image_view = msaa_image_view;
 
         self.depth_image = depth_image;
         self.depth_image_memory = depth_image_memory;
@@ -1654,6 +1664,7 @@ impl HelloTriangleApplication {
             &self.device,
             self.render_pass,
             &self.swapchain_image_views,
+            self.color_image_view,
             self.depth_image_view,
             self.swapchain_extent,
         )?;
@@ -1663,9 +1674,9 @@ impl HelloTriangleApplication {
 
     fn cleanup_swapchain(&self) {
         unsafe {
-            self.device.destroy_image_view(self.msaa_image_view, None);
-            self.device.destroy_image(self.msaa_image, None);
-            self.device.free_memory(self.msaa_image_memory, None);
+            self.device.destroy_image_view(self.color_image_view, None);
+            self.device.destroy_image(self.color_image, None);
+            self.device.free_memory(self.color_image_memory, None);
             self.device.destroy_image_view(self.depth_image_view, None);
             self.device.destroy_image(self.depth_image, None);
             self.device.free_memory(self.depth_image_memory, None);
@@ -1739,7 +1750,7 @@ impl HelloTriangleApplication {
         };
 
         let mut clear_colors = [vk::ClearValue::default(); 2];
-        clear_colors[0].color.float32 = [0.025, 0.025, 0.025, 1.0];
+        clear_colors[0].color.float32 = [0.0, 0.0, 0.0, 1.0];
         clear_colors[1].depth_stencil = vk::ClearDepthStencilValue::default().depth(1.0).stencil(0);
 
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
@@ -2347,26 +2358,37 @@ impl HelloTriangleApplication {
         physical_device: vk::PhysicalDevice,
         device: &ash::Device,
         format: vk::Format,
+        msaa_samples: vk::SampleCountFlags,
     ) -> Result<vk::RenderPass> {
         let color_attachement = vk::AttachmentDescription::default()
             .format(format)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(msaa_samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
         let depth_attachement = vk::AttachmentDescription::default()
             .format(Self::find_depth_format(instance, physical_device)?)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(msaa_samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::DONT_CARE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        let color_attachement_resolve = vk::AttachmentDescription::default()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
         let color_attackment_ref = vk::AttachmentReference::default()
             .attachment(0)
@@ -2376,10 +2398,15 @@ impl HelloTriangleApplication {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
+        let color_attackment_resolve_ref = vk::AttachmentReference::default()
+            .attachment(2)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
         let subpass = vk::SubpassDescription::default()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(slice::from_ref(&color_attackment_ref))
-            .depth_stencil_attachment(&depth_attackment_ref);
+            .depth_stencil_attachment(&depth_attackment_ref)
+            .resolve_attachments(slice::from_ref(&color_attackment_resolve_ref));
 
         let subpass_dependency = vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
@@ -2398,7 +2425,11 @@ impl HelloTriangleApplication {
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
 
-        let attachments = [color_attachement, depth_attachement];
+        let attachments = [
+            color_attachement,
+            depth_attachement,
+            color_attachement_resolve,
+        ];
         let render_pass_create_info = vk::RenderPassCreateInfo::default()
             .attachments(&attachments)
             .subpasses(slice::from_ref(&subpass))
@@ -2438,6 +2469,7 @@ impl HelloTriangleApplication {
         device: &ash::Device,
         render_pass: vk::RenderPass,
         descriptor_set_layout: vk::DescriptorSetLayout,
+        msaa_samples: vk::SampleCountFlags,
     ) -> Result<(vk::PipelineLayout, vk::Pipeline)> {
         // Create vertex and fragment shaders
         let vertex_shader_spirv = include_bytes!("../shaders/shader.spirv.vert");
@@ -2491,7 +2523,7 @@ impl HelloTriangleApplication {
         // Multisampling
         let multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            .rasterization_samples(msaa_samples);
 
         // Color blending
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
@@ -2592,13 +2624,14 @@ impl HelloTriangleApplication {
         device: &ash::Device,
         render_pass: vk::RenderPass,
         swapchain_image_views: &[vk::ImageView],
+        msaa_image_view: vk::ImageView,
         depth_image_view: vk::ImageView,
         swapchain_extent: vk::Extent2D,
     ) -> Result<Vec<vk::Framebuffer>> {
         let mut framebuffers = Vec::with_capacity(swapchain_image_views.len());
 
         for image_view in swapchain_image_views {
-            let attachments = [*image_view, depth_image_view];
+            let attachments = [msaa_image_view, depth_image_view, *image_view];
             let framebuffer_create_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
                 .attachments(&attachments)
