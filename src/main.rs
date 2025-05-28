@@ -172,6 +172,7 @@ struct HelloTriangleApplication {
     depth_image: vk::Image,
     depth_image_memory: vk::DeviceMemory,
     depth_image_view: vk::ImageView,
+    _msaa_samples: vk::SampleCountFlags,
 }
 
 /// Public functions
@@ -202,7 +203,7 @@ impl HelloTriangleApplication {
 
         Self::log_physical_devices(&instance)?;
 
-        let physical_device =
+        let (physical_device, msaa_samples) =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
 
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
@@ -366,6 +367,7 @@ impl HelloTriangleApplication {
             depth_image,
             depth_image_view,
             depth_image_memory,
+            _msaa_samples: msaa_samples,
         })
     }
 
@@ -1938,11 +1940,36 @@ impl HelloTriangleApplication {
         }
     }
 
+    fn get_max_usable_sample_count(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> vk::SampleCountFlags {
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
+        let counts = properties.limits.framebuffer_color_sample_counts
+            & properties.limits.framebuffer_depth_sample_counts;
+
+        if counts.contains(vk::SampleCountFlags::TYPE_64) {
+            vk::SampleCountFlags::TYPE_64
+        } else if counts.contains(vk::SampleCountFlags::TYPE_32) {
+            vk::SampleCountFlags::TYPE_32
+        } else if counts.contains(vk::SampleCountFlags::TYPE_16) {
+            vk::SampleCountFlags::TYPE_16
+        } else if counts.contains(vk::SampleCountFlags::TYPE_8) {
+            vk::SampleCountFlags::TYPE_8
+        } else if counts.contains(vk::SampleCountFlags::TYPE_4) {
+            vk::SampleCountFlags::TYPE_4
+        } else if counts.contains(vk::SampleCountFlags::TYPE_2) {
+            vk::SampleCountFlags::TYPE_2
+        } else {
+            vk::SampleCountFlags::TYPE_1
+        }
+    }
+
     fn pick_physical_device(
         instance: &ash::Instance,
         khr_surface_instance: &khr::surface::Instance,
         surface: vk::SurfaceKHR,
-    ) -> Result<vk::PhysicalDevice> {
+    ) -> Result<(vk::PhysicalDevice, vk::SampleCountFlags)> {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
         if physical_devices.is_empty() {
@@ -1951,7 +1978,8 @@ impl HelloTriangleApplication {
 
         for physical_device in physical_devices.into_iter() {
             if Self::is_device_suitable(instance, khr_surface_instance, physical_device, surface)? {
-                return Ok(physical_device);
+                let msaa_samples = Self::get_max_usable_sample_count(instance, physical_device);
+                return Ok((physical_device, msaa_samples));
             }
         }
 
