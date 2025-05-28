@@ -2207,7 +2207,9 @@ impl HelloTriangleApplication {
                         .queue_family_index(queue_family_indices.present_family.unwrap()),
                 ]
             };
-        let device_features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+        let device_features = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(true)
+            .sample_rate_shading(true);
         let extensions = ["VK_KHR_swapchain".to_string()];
         let extensions: Vec<CString> = extensions
             .iter()
@@ -2522,8 +2524,8 @@ impl HelloTriangleApplication {
 
         // Multisampling
         let multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(msaa_samples);
+            .rasterization_samples(msaa_samples)
+            .sample_shading_enable(true).min_sample_shading(0.2);
 
         // Color blending
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
