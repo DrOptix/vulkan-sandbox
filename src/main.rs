@@ -412,7 +412,8 @@ impl HelloTriangleApplication {
             self.glfw.poll_events();
 
             for (_, event) in glfw::flush_messages(&self.window_events) {
-                println!("{event:?}");
+                log::debug!("{event:?}");
+
                 if let glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) = event
                 {
                     self.window.set_should_close(true)
