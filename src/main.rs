@@ -14,6 +14,10 @@ use image::EncodableLayout;
 use num_traits::One;
 
 fn main() {
+    env_logger::init();
+
+    log::info!("Hello");
+
     match HelloTriangleApplication::new(800, 600, "Hello triangle") {
         Ok(mut app) => {
             if let Err(err) = app.run() {
