@@ -211,7 +211,7 @@ impl HelloTriangleApplication {
         let (physical_device, msaa_samples) =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
 
-        dbg!(msaa_samples);
+        log::debug!("MSAA samples: {msaa_samples:?}");
 
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
             &instance,
