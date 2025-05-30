@@ -31,10 +31,10 @@ fn main() {
 }
 
 fn print_error(err: &anyhow::Error) {
-    eprintln!("Error: {err}");
-    for cause in err.chain() {
-        eprintln!("  - {cause}");
-    }
+    log::error!("{err}");
+    err.chain().enumerate().for_each(|(i, cause)| {
+        log::error!("  {i}: {cause}");
+    });
 }
 
 #[derive(Debug, Default)]
