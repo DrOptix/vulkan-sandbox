@@ -1837,6 +1837,8 @@ impl HelloTriangleApplication {
         height: u32,
         title: &str,
     ) -> Result<(glfw::PWindow, GlfwReceiver<(f64, glfw::WindowEvent)>)> {
+        log::info!("Creating window '{title}' ({width}, {height})");
+
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         glfw.window_hint(glfw::WindowHint::Resizable(true));
 
@@ -2529,7 +2531,8 @@ impl HelloTriangleApplication {
         // Multisampling
         let multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(msaa_samples)
-            .sample_shading_enable(true).min_sample_shading(0.2);
+            .sample_shading_enable(true)
+            .min_sample_shading(0.2);
 
         // Color blending
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
