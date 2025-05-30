@@ -2073,37 +2073,39 @@ impl HelloTriangleApplication {
     fn log_physical_devices(instance: &ash::Instance) -> Result<()> {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
-        for (i, physical_device) in physical_devices.into_iter().enumerate() {
-            println!("Physical Device {i}");
+        physical_devices
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, physical_device)| {
+                let physical_device_properties =
+                    unsafe { instance.get_physical_device_properties(physical_device) };
 
-            // Get the physical device properties
-            let physical_device_properties =
-                unsafe { instance.get_physical_device_properties(physical_device) };
+                let device_name = unsafe {
+                    std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
+                };
 
-            let device_name = unsafe {
-                std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
-            };
-            println!("  Device Name: {}", device_name.to_str().unwrap());
+                log::info!("Physical Device {i}: {}", device_name.to_string_lossy());
 
-            // Get the queue family properties
-            let queue_family_properties =
-                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+                let queue_family_properties = unsafe {
+                    instance.get_physical_device_queue_family_properties(physical_device)
+                };
 
-            for (j, queue_family_property) in queue_family_properties.into_iter().enumerate() {
-                println!("  Queue Family {j}");
-
-                println!("    Queue Flags: {:?}", queue_family_property.queue_flags);
-                println!("    Queue Count: {}", queue_family_property.queue_count);
-                println!(
-                    "    Timestamp Valid Bits: {}",
-                    queue_family_property.timestamp_valid_bits
+                queue_family_properties.into_iter().enumerate().for_each(
+                    |(j, queue_family_property)| {
+                        log::info!("  Queue Family {j}");
+                        log::info!("    Queue Flags: {:?}", queue_family_property.queue_flags);
+                        log::info!("    Queue Count: {}", queue_family_property.queue_count);
+                        log::info!(
+                            "    Timestamp Valid Bits: {}",
+                            queue_family_property.timestamp_valid_bits
+                        );
+                        log::info!(
+                            "    Min Image Transfer Granularity: {:?}",
+                            queue_family_property.min_image_transfer_granularity
+                        );
+                    },
                 );
-                println!(
-                    "    Min Image Transfer Granularity: {:?}",
-                    queue_family_property.min_image_transfer_granularity
-                );
-            }
-        }
+            });
 
         Ok(())
     }
