@@ -14,6 +14,8 @@ use image::EncodableLayout;
 use num_traits::One;
 
 fn main() {
+    env_logger::init();
+
     match HelloTriangleApplication::new(800, 600, "Hello triangle") {
         Ok(mut app) => {
             if let Err(err) = app.run() {
@@ -27,10 +29,10 @@ fn main() {
 }
 
 fn print_error(err: &anyhow::Error) {
-    eprintln!("Error: {err}");
-    for cause in err.chain() {
-        eprintln!("  - {cause}");
-    }
+    log::error!("{err}");
+    err.chain().enumerate().for_each(|(i, cause)| {
+        log::error!("  {i}: {cause}");
+    });
 }
 
 #[derive(Debug, Default)]
@@ -209,7 +211,7 @@ impl HelloTriangleApplication {
         let (physical_device, msaa_samples) =
             Self::pick_physical_device(&instance, &khr_surface_instance, window_surface)?;
 
-        dbg!(msaa_samples);
+        log::debug!("MSAA samples: {msaa_samples:?}");
 
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
             &instance,
@@ -408,7 +410,8 @@ impl HelloTriangleApplication {
             self.glfw.poll_events();
 
             for (_, event) in glfw::flush_messages(&self.window_events) {
-                println!("{event:?}");
+                log::debug!("{event:?}");
+
                 if let glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) = event
                 {
                     self.window.set_should_close(true)
@@ -1833,6 +1836,8 @@ impl HelloTriangleApplication {
         height: u32,
         title: &str,
     ) -> Result<(glfw::PWindow, GlfwReceiver<(f64, glfw::WindowEvent)>)> {
+        log::info!("Creating window '{title}' ({width}, {height})");
+
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         glfw.window_hint(glfw::WindowHint::Resizable(true));
 
@@ -2067,37 +2072,39 @@ impl HelloTriangleApplication {
     fn log_physical_devices(instance: &ash::Instance) -> Result<()> {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
-        for (i, physical_device) in physical_devices.into_iter().enumerate() {
-            println!("Physical Device {i}");
+        physical_devices
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, physical_device)| {
+                let physical_device_properties =
+                    unsafe { instance.get_physical_device_properties(physical_device) };
 
-            // Get the physical device properties
-            let physical_device_properties =
-                unsafe { instance.get_physical_device_properties(physical_device) };
+                let device_name = unsafe {
+                    std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
+                };
 
-            let device_name = unsafe {
-                std::ffi::CStr::from_ptr(physical_device_properties.device_name.as_ptr())
-            };
-            println!("  Device Name: {}", device_name.to_str().unwrap());
+                log::info!("Physical Device {i}: {}", device_name.to_string_lossy());
 
-            // Get the queue family properties
-            let queue_family_properties =
-                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+                let queue_family_properties = unsafe {
+                    instance.get_physical_device_queue_family_properties(physical_device)
+                };
 
-            for (j, queue_family_property) in queue_family_properties.into_iter().enumerate() {
-                println!("  Queue Family {j}");
-
-                println!("    Queue Flags: {:?}", queue_family_property.queue_flags);
-                println!("    Queue Count: {}", queue_family_property.queue_count);
-                println!(
-                    "    Timestamp Valid Bits: {}",
-                    queue_family_property.timestamp_valid_bits
+                queue_family_properties.into_iter().enumerate().for_each(
+                    |(j, queue_family_property)| {
+                        log::info!("  Queue Family {j}");
+                        log::info!("    Queue Flags: {:?}", queue_family_property.queue_flags);
+                        log::info!("    Queue Count: {}", queue_family_property.queue_count);
+                        log::info!(
+                            "    Timestamp Valid Bits: {}",
+                            queue_family_property.timestamp_valid_bits
+                        );
+                        log::info!(
+                            "    Min Image Transfer Granularity: {:?}",
+                            queue_family_property.min_image_transfer_granularity
+                        );
+                    },
                 );
-                println!(
-                    "    Min Image Transfer Granularity: {:?}",
-                    queue_family_property.min_image_transfer_granularity
-                );
-            }
-        }
+            });
 
         Ok(())
     }
@@ -2525,7 +2532,8 @@ impl HelloTriangleApplication {
         // Multisampling
         let multisample_create_info = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(msaa_samples)
-            .sample_shading_enable(true).min_sample_shading(0.2);
+            .sample_shading_enable(true)
+            .min_sample_shading(0.2);
 
         // Color blending
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
