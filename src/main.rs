@@ -11,7 +11,6 @@ use anyhow::{Context, Result, anyhow};
 use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
 use image::EncodableLayout;
-use num_traits::One;
 
 fn main() {
     env_logger::init();
@@ -57,9 +56,9 @@ struct SwapChainSupportDetails {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 struct Vertex {
-    pos: glm::Vec3,
-    color: glm::Vec3,
-    tex_coord: glm::Vec2,
+    pos: glam::Vec3,
+    color: glam::Vec3,
+    tex_coord: glam::Vec2,
 }
 
 impl PartialEq for Vertex {
@@ -119,9 +118,9 @@ impl Vertex {
 #[repr(C)]
 #[derive(Debug, Clone)]
 struct UniformBufferObject {
-    model: glm::Mat4,
-    view: glm::Mat4,
-    projection: glm::Mat4,
+    model: glam::Mat4,
+    view: glam::Mat4,
+    projection: glam::Mat4,
 }
 
 struct HelloTriangleApplication {
@@ -494,7 +493,7 @@ impl HelloTriangleApplication {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        let mip_levels = glm::floor(glm::log2(glm::max(width, height) as f32)) as u32;
+        let mip_levels = (std::cmp::max(width, height) as f32).log2().floor() as u32;
 
         unsafe {
             let data_ptr = device.map_memory(
@@ -984,13 +983,13 @@ impl HelloTriangleApplication {
                 let tex_coord_offset = (2 * idx) as usize;
 
                 let vertex = Vertex {
-                    pos: glm::vec3(
+                    pos: glam::vec3(
                         model.mesh.positions[pos_offset],
                         model.mesh.positions[pos_offset + 1],
                         model.mesh.positions[pos_offset + 2],
                     ),
-                    color: glm::vec3(1.0, 1.0, 1.0),
-                    tex_coord: glm::vec2(
+                    color: glam::vec3(1.0, 1.0, 1.0),
+                    tex_coord: glam::vec2(
                         model.mesh.texcoords[tex_coord_offset],
                         1.0 - model.mesh.texcoords[tex_coord_offset + 1],
                     ),
@@ -1563,25 +1562,21 @@ impl HelloTriangleApplication {
         let duration = current_time - self.start_time;
         let duration = duration.as_secs_f32();
 
-        let model = glm::ext::rotate(
-            &glm::Mat4::one(),
-            duration * glm::radians(45.0),
-            glm::vec3(0.0, 0.0, 1.0),
-        );
-        let view = glm::ext::look_at(
-            glm::vec3(2.0, 2.0, 2.0),
-            glm::vec3(0.0, 0.0, 0.0),
-            glm::vec3(0.0, 0.0, 1.0),
+        let model = glam::Mat4::from_rotation_z(duration * f32::to_radians(45.0));
+        let view = glam::Mat4::look_at_rh(
+            glam::vec3(2.0, 2.0, 2.0),
+            glam::vec3(0.0, 0.0, 0.0),
+            glam::vec3(0.0, 0.0, 1.0),
         );
 
-        let mut projection = glm::ext::perspective(
-            glm::radians(45.0),
+        let mut projection = glam::Mat4::perspective_rh(
+            f32::to_radians(45.0),
             self.swapchain_extent.width as f32 / self.swapchain_extent.height as f32,
             0.1,
             10.0,
         );
 
-        projection[1][1] *= -1.0;
+        projection.col_mut(1)[1] *= -1.0;
 
         let ubo = UniformBufferObject {
             model,
