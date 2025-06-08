@@ -12,26 +12,21 @@ use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
 use image::EncodableLayout;
 
+mod log;
+
 fn main() {
     env_logger::init();
 
     match HelloTriangleApplication::new(800, 600, "Hello triangle") {
         Ok(mut app) => {
             if let Err(err) = app.run() {
-                print_error(&err);
+                log::error_details(&err);
             }
         }
         Err(err) => {
-            print_error(&err);
+            log::error_details(&err);
         }
     };
-}
-
-fn print_error(err: &anyhow::Error) {
-    log::error!("{err}");
-    err.chain().enumerate().for_each(|(i, cause)| {
-        log::error!("  {i}: {cause}");
-    });
 }
 
 #[derive(Debug, Default)]
