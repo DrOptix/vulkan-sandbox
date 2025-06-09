@@ -12,7 +12,7 @@ use ash::{ext::debug_utils, khr, vk};
 use glfw::{Glfw, GlfwReceiver};
 use image::EncodableLayout;
 
-mod log;
+use engine::log;
 
 fn main() {
     env_logger::init();
