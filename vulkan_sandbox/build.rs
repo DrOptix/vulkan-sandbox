@@ -25,7 +25,8 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=build.rs");
-    for (input, _) in shaders {
+    for (input, output) in shaders {
         println!("cargo:rerun-if-changed=shaders/{input}");
+        println!("cargo:rerun-if-changed=shaders/{output}");
     }
 }
