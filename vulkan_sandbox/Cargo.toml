@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-engine = { path = "./engine/" }
+engine = { path = "../engine/" }
 
 anyhow = "1.0.98"
 ash = "0.38.0"

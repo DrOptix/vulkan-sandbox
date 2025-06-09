@@ -8,7 +8,7 @@ fn main() {
     ];
 
     for (input, output) in shaders {
-        let shaders_dir = PathBuf::from("shaders/");
+        let shaders_dir = PathBuf::from("./shaders/");
         let input_path = shaders_dir.join(input);
         let output_path = shaders_dir.join(output);
 
