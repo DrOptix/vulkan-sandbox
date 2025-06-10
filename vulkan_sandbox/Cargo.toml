@@ -1,0 +1,15 @@
+[package]
+name = "vulkan-sandbox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+engine = { path = "../engine/" }
+
+anyhow = "1.0.98"
+ash = "0.38.0"
+env_logger = "0.11.8"
+glam = "0.30.3"
+glfw = { version = "0.59.0", features = ["vulkan"] }
+image = "0.25.6"
+tobj = "4.0.3"

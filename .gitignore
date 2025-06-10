@@ -1,3 +1,4 @@
-/target
-shaders/shader.spirv.frag
-shaders/shader.spirv.vert
+/**/target
+
+/vulkan_sandbox/shaders/shader.spirv.frag
+/vulkan_sandbox/shaders/shader.spirv.vert
