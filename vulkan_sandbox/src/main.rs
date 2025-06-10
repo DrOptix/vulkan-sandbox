@@ -3,7 +3,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     ffi::{CStr, CString, c_char},
-    path::Path,
+    path::{Path, PathBuf},
     ptr, slice,
 };
 
@@ -291,7 +291,7 @@ impl HelloTriangleApplication {
             &device,
             command_pool,
             graphics_queue,
-            Path::new("./textures/viking_room.png"),
+            &resource_path("./textures/viking_room.png"),
         )?;
 
         let texture_image_view =
@@ -300,7 +300,7 @@ impl HelloTriangleApplication {
         let texture_sampler =
             Self::create_texture_sampler(&instance, &device, physical_device, mip_levels)?;
 
-        let (vertices, indices) = Self::load_model(Path::new("./models/viking_room.obj"))?;
+        let (vertices, indices) = Self::load_model(&resource_path("./models/viking_room.obj"))?;
 
         let (vertex_buffer, vertex_buffer_memory) = Self::create_vertex_buffer(
             &instance,
@@ -2730,5 +2730,21 @@ impl Drop for HelloTriangleApplication {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         };
+    }
+}
+
+fn resource_path(path: &str) -> PathBuf {
+    let cargo_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let mut cargo_file_path = PathBuf::from(&cargo_dir);
+    cargo_file_path.push(path);
+
+    if cargo_file_path.exists() {
+        cargo_file_path
+    } else {
+        let current_dir = std::env::current_dir().unwrap();
+        let mut file_path = current_dir;
+        file_path.push(path);
+
+        file_path
     }
 }
